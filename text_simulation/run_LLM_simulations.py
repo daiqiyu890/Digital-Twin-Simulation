@@ -95,8 +95,6 @@ async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, 
         "output_updated_questions_dir_for_verify": output_updated_questions_dir_for_verify
     }
 
-    NUM_SAMPLES_PER_PERSONA = 100 
-
     llm_config = LLMConfig(
         model_name=llm_config_params['model_name'],
         temperature=llm_config_params.get('temperature', 0.7),
@@ -252,5 +250,3 @@ if __name__ == "__main__":
         force_regenerate=force_regenerate,
         max_personas=max_personas
     )) 
-
-
