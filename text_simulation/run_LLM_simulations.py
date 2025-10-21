@@ -1,8 +1,10 @@
+
 import os
 import json
 import argparse
 import re
 import yaml
+import sys
 from tqdm import tqdm
 import asyncio
 from dotenv import load_dotenv
@@ -19,11 +21,26 @@ def load_config(config_path):
         config_data = yaml.safe_load(f)
     return config_data
 
+# def get_output_path(base_output_dir, persona_id, question_id):
+#     persona_output_folder = os.path.join(base_output_dir, persona_id)
+#     os.makedirs(persona_output_folder, exist_ok=True)
+#     output_filename = f"{question_id}_response.json"
+#     return os.path.join(persona_output_folder, output_filename)
+
 def get_output_path(base_output_dir, persona_id, question_id):
+    # 自动防止重复嵌套 pid_sim/pid_sim
+    if persona_id == question_id:
+        # 去掉 _sim部分
+        persona_id = question_id.split("_sim")[0]
+
     persona_output_folder = os.path.join(base_output_dir, persona_id)
-    os.makedirs(persona_output_folder, exist_ok=True)
+    simulation_output_folder = os.path.join(persona_output_folder, question_id)
+    os.makedirs(simulation_output_folder, exist_ok=True)
+
     output_filename = f"{question_id}_response.json"
-    return os.path.join(persona_output_folder, output_filename)
+    return os.path.join(simulation_output_folder, output_filename)
+
+
 
 # This is the callback function that will be passed to llm_helper
 # It must be a regular synchronous function because it performs file I/O and calls another sync function.
@@ -41,8 +58,8 @@ def save_and_verify_callback(prompt_id: str, llm_response_data: dict, original_p
         print(f"Error for {prompt_id}: Missing critical path arguments in verification_callback_args.")
         return False # Critical configuration error
 
-    persona_id = prompt_id # Assuming prompt_id is the persona_id
-    question_id = persona_id # Assuming question_id is also persona_id for this context
+    persona_id = prompt_id.split("_sim")[0] # Assuming prompt_id is the persona_id
+    question_id = prompt_id # Assuming question_id is also persona_id for this context
 
     output_path = get_output_path(base_output_dir, persona_id, question_id)
 
@@ -67,10 +84,11 @@ def save_and_verify_callback(prompt_id: str, llm_response_data: dict, original_p
         # print(f"Skipping verification for {prompt_id} due to LLM call error: {llm_response_data['error']}")
         return False # Treat as overall failure for this attempt if LLM errored
 
+    # base_pid = persona_id.split("_sim")[0]
     # Now, verify the output that was just saved
     try:
         is_verified = postprocess_simulation_outputs_with_pid(
-            persona_id,
+            question_id,
             base_output_dir, # This is the directory where individual persona folders are, used by postprocess
             question_json_base_dir,
             output_updated_questions_dir_for_verify
@@ -84,7 +102,7 @@ def save_and_verify_callback(prompt_id: str, llm_response_data: dict, original_p
         return False
 
 
-async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, provider, num_workers, max_retries_for_sequence, force_regenerate, max_personas=None):
+async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, provider, num_workers, max_retries_for_sequence, force_regenerate, max_personas=None,num_simulations_per_persona=100):
     question_json_base_dir_for_verify = "./data/mega_persona_json/answer_blocks" 
     output_updated_questions_dir_for_verify = os.path.join(base_output_dir, "answer_blocks_llm_imputed")
 
@@ -136,25 +154,45 @@ async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, 
     prompts_to_process_for_llm = []
     skipped_due_to_existing_verified_count = 0
 
+    # for info in all_prompt_files_info:
+    #     p_id, f_path = info['persona_id'], info['file_path']
+    #     # Check if output *already* exists and is *already* verified if not force_regenerate
+    #     # The save_and_verify_callback will handle saving and verifying for *new* calls.
+    #     output_json_path = get_output_path(base_output_dir, p_id, p_id) # p_id is also question_id here
+    #     if os.path.exists(output_json_path) and not force_regenerate:
+    #         # We need to check if this existing output is actually valid according to verification logic
+    #         # This call to verify_and_process_output is for *pre-existing* files.
+    #         if postprocess_simulation_outputs_with_pid(p_id, base_output_dir, question_json_base_dir_for_verify, output_updated_questions_dir_for_verify):
+    #             skipped_due_to_existing_verified_count += 1
+    #             continue
+        
+    #     try:
+    #         with open(f_path, 'r', encoding='utf-8') as f:
+    #             prompt_content = f.read()
+    #         # (prompt_id_for_helper, prompt_text_for_helper)
+    #         prompts_to_process_for_llm.append((p_id, prompt_content)) 
+    #     except Exception as e:
+    #         print(f"Error reading prompt file {f_path} for {p_id}: {e}")
+
+
     for info in all_prompt_files_info:
         p_id, f_path = info['persona_id'], info['file_path']
-        # Check if output *already* exists and is *already* verified if not force_regenerate
-        # The save_and_verify_callback will handle saving and verifying for *new* calls.
-        output_json_path = get_output_path(base_output_dir, p_id, p_id) # p_id is also question_id here
-        if os.path.exists(output_json_path) and not force_regenerate:
-            # We need to check if this existing output is actually valid according to verification logic
-            # This call to verify_and_process_output is for *pre-existing* files.
-            if postprocess_simulation_outputs_with_pid(p_id, base_output_dir, question_json_base_dir_for_verify, output_updated_questions_dir_for_verify):
-                skipped_due_to_existing_verified_count += 1
-                continue
-        
+
         try:
             with open(f_path, 'r', encoding='utf-8') as f:
                 prompt_content = f.read()
-            # (prompt_id_for_helper, prompt_text_for_helper)
-            prompts_to_process_for_llm.append((p_id, prompt_content)) 
         except Exception as e:
             print(f"Error reading prompt file {f_path} for {p_id}: {e}")
+            continue
+
+        # 🔁 对每个 persona 进行多次 simulation（例如 100 次）
+        for sim_idx in range(1, num_simulations_per_persona + 1):
+            sim_id = f"{p_id}_sim{sim_idx:03d}"  # e.g. pid_574_sim001
+            prompts_to_process_for_llm.append((sim_id, prompt_content))
+
+    print(f"Prepared {len(prompts_to_process_for_llm)} total simulations "
+      f"({num_simulations_per_persona} per persona).")
+
 
     if skipped_due_to_existing_verified_count > 0:
         print(f"Skipped {skipped_due_to_existing_verified_count} files as their output already exists and is verified.")
@@ -204,14 +242,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run LLM simulations with integrated verification and retries.")
     parser.add_argument("--config", required=True, help="Path to the YAML configuration file.")
     parser.add_argument("--max_personas", type=int, help="Maximum number of personas to process")
-    args = parser.parse_args()
+    parser.add_argument("--num_simulations_per_persona", type=int, default=None, help="Number of simulations per persona (e.g., 100)")
 
+    args = parser.parse_args()
     config_values = load_config(args.config)
     
     prompts_root_dir = config_values.get('input_folder_dir', './text_simulation_input_with_context')
     base_output_dir = config_values.get('output_folder_dir', './text_simulation_output_with_context')
     prompts_root_dir = os.path.join("./text_simulation", prompts_root_dir)
     base_output_dir = os.path.join("./text_simulation", base_output_dir)
+    num_simulations_per_persona = config_values.get('num_simulations_per_persona', None)
     provider = config_values.get('provider', 'gemini')
     num_workers = config_values.get('num_workers', 5)
     max_retries_for_sequence = config_values.get('max_retries', 3) # Renamed for clarity: retries for the whole sequence
@@ -248,5 +288,8 @@ if __name__ == "__main__":
         num_workers=num_workers,
         max_retries_for_sequence=max_retries_for_sequence,
         force_regenerate=force_regenerate,
-        max_personas=max_personas
+        max_personas=max_personas,
+        num_simulations_per_persona=num_simulations_per_persona
     )) 
+
+

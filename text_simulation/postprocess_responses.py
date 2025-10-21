@@ -185,16 +185,95 @@ def validate_response(response: Any, question: Dict) -> bool:
     
     return validation_func(answers, question)
 
+# def update_question_json_with_response(qid, answer_block_json_path, simulation_response_data, output_dir):
+#     """
+#     Loads an original answer block JSON, updates its "Answers" field based on 
+#     parsed answers from the simulation response_text, and saves it.
+
+#     Args:
+#         answer_block_json_path (str): Path to the original answer block JSON file.
+#         simulation_response_data (dict): Parsed JSON data from the simulation output file,
+#                                          containing at least 'response_text'.
+#         output_dir (str): Directory to save the updated question JSON.
+#     """
+#     try:
+#         with open(answer_block_json_path, 'r', encoding='utf-8') as f:
+#             answer_block_data = json.load(f)
+#     except FileNotFoundError:
+#         print(f"Error: Answer block JSON not found: {answer_block_json_path}")
+#         return False
+#     except json.JSONDecodeError:
+#         print(f"Error: Could not decode answer block JSON: {answer_block_json_path}")
+#         return False
+
+#     response_text = simulation_response_data.get("response_text")
+#     if not response_text:
+#         print(f"Warning: No response_text found in simulation data for {answer_block_json_path}. Skipping.")
+#         return False
+
+#     # Save raw response text for debugging
+#     raw_response_text_dir = os.path.join(output_dir, "llm_response_text")
+#     if not os.path.exists(raw_response_text_dir):
+#         os.makedirs(raw_response_text_dir)
+#     with open(os.path.join(raw_response_text_dir, f"{qid}_response_text.txt"), "w", encoding="utf-8") as f:
+#         f.write(response_text)
+
+#     try:
+#         if "```json" in response_text:
+#             response_text_json = json.loads(response_text.split("```json")[1].split("```")[0])
+#         else:
+#             response_text_json = json.loads(response_text)
+#     except (json.JSONDecodeError, IndexError) as e:
+#         print(f"Error parsing response JSON for {qid}: {e}")
+#         return False
+
+#     question_items = []
+#     count = 0
+#     failed_responses = 0
+#     validation_failures = 0
+
+#     for block in answer_block_data:
+#         for question in block['Questions']:
+#             if question['QuestionType'] != 'DB':
+#                 count += 1
+#                 try:
+#                     retrieved_response = response_text_json[f"Q{count}"]
+#                     if retrieved_response is None:
+#                         failed_responses += 1
+#                         continue
+
+#                     # Validate response based on question type
+#                     if not validate_response(retrieved_response, question):
+#                         print(f"Warning: Invalid response for {qid} Q{count} ({question['QuestionType']}): {retrieved_response['Answers']}")
+#                         validation_failures += 1
+#                         continue
+
+#                     question["Original_Answers"] = copy.deepcopy(question["Answers"])
+#                     question['Answers'] = retrieved_response["Answers"]
+#                     if "Reasoning" in retrieved_response:
+#                         question['LLM_Reasoning'] = retrieved_response["Reasoning"]
+#                     question_items.append(question)
+#                 except KeyError as e:
+#                     print(f"Error accessing response for {qid} Q{count}: {e}")
+#                     failed_responses += 1
+#                     continue
+
+#     if failed_responses > 0 or validation_failures > 0:
+#         print(f"Warning: {failed_responses} failed responses and {validation_failures} validation failures for {qid}")
+
+#     # Export the updated answer block json
+#     output_path = os.path.join(output_dir, os.path.basename(answer_block_json_path))
+#     with open(output_path, 'w', encoding='utf-8') as f:
+#         json.dump(answer_block_data, f, indent=2)
+
+#     if failed_responses > 0 or validation_failures > 0:
+#         return False
+#     return True
+
 def update_question_json_with_response(qid, answer_block_json_path, simulation_response_data, output_dir):
     """
-    Loads an original answer block JSON, updates its "Answers" field based on 
-    parsed answers from the simulation response_text, and saves it.
-
-    Args:
-        answer_block_json_path (str): Path to the original answer block JSON file.
-        simulation_response_data (dict): Parsed JSON data from the simulation output file,
-                                         containing at least 'response_text'.
-        output_dir (str): Directory to save the updated question JSON.
+    Load an answer block JSON, update its 'Answers' field using simulation output,
+    and save to simulation-specific output directory.
     """
     try:
         with open(answer_block_json_path, 'r', encoding='utf-8') as f:
@@ -208,16 +287,16 @@ def update_question_json_with_response(qid, answer_block_json_path, simulation_r
 
     response_text = simulation_response_data.get("response_text")
     if not response_text:
-        print(f"Warning: No response_text found in simulation data for {answer_block_json_path}. Skipping.")
+        print(f"Warning: No response_text found for {qid}. Skipping.")
         return False
 
-    # Save raw response text for debugging
-    raw_response_text_dir = os.path.join(output_dir, "llm_response_text")
-    if not os.path.exists(raw_response_text_dir):
-        os.makedirs(raw_response_text_dir)
-    with open(os.path.join(raw_response_text_dir, f"{qid}_response_text.txt"), "w", encoding="utf-8") as f:
+    # 保存原始 response_text 以便 debug
+    raw_dir = os.path.join(output_dir, "llm_response_text")
+    os.makedirs(raw_dir, exist_ok=True)
+    with open(os.path.join(raw_dir, f"{qid}_response_text.txt"), "w", encoding="utf-8") as f:
         f.write(response_text)
 
+    # 尝试解析 JSON 格式的响应
     try:
         if "```json" in response_text:
             response_text_json = json.loads(response_text.split("```json")[1].split("```")[0])
@@ -227,7 +306,6 @@ def update_question_json_with_response(qid, answer_block_json_path, simulation_r
         print(f"Error parsing response JSON for {qid}: {e}")
         return False
 
-    question_items = []
     count = 0
     failed_responses = 0
     validation_failures = 0
@@ -237,14 +315,12 @@ def update_question_json_with_response(qid, answer_block_json_path, simulation_r
             if question['QuestionType'] != 'DB':
                 count += 1
                 try:
-                    retrieved_response = response_text_json[f"Q{count}"]
+                    retrieved_response = response_text_json.get(f"Q{count}")
                     if retrieved_response is None:
                         failed_responses += 1
                         continue
 
-                    # Validate response based on question type
                     if not validate_response(retrieved_response, question):
-                        print(f"Warning: Invalid response for {qid} Q{count} ({question['QuestionType']}): {retrieved_response['Answers']}")
                         validation_failures += 1
                         continue
 
@@ -252,53 +328,111 @@ def update_question_json_with_response(qid, answer_block_json_path, simulation_r
                     question['Answers'] = retrieved_response["Answers"]
                     if "Reasoning" in retrieved_response:
                         question['LLM_Reasoning'] = retrieved_response["Reasoning"]
-                    question_items.append(question)
-                except KeyError as e:
-                    print(f"Error accessing response for {qid} Q{count}: {e}")
+                except KeyError:
                     failed_responses += 1
                     continue
 
-    if failed_responses > 0 or validation_failures > 0:
-        print(f"Warning: {failed_responses} failed responses and {validation_failures} validation failures for {qid}")
+    if failed_responses or validation_failures:
+        print(f"Warning: {failed_responses} failed, {validation_failures} invalid for {qid}")
 
-    # Export the updated answer block json
+    # ✅ 保存到 simulation 独立目录
     output_path = os.path.join(output_dir, os.path.basename(answer_block_json_path))
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(answer_block_data, f, indent=2)
 
-    if failed_responses > 0 or validation_failures > 0:
-        return False
-    return True
+    return not (failed_responses or validation_failures)
 
-def postprocess_simulation_outputs_with_pid(persona_id, simulation_output_dir, question_json_base_dir, output_updated_questions_dir):
+
+# def postprocess_simulation_outputs_with_pid(persona_id, simulation_output_dir, question_json_base_dir, output_updated_questions_dir):
+#     """
+#     Finds existing simulation outputs, matches them with original answer block JSONs,
+#     and updates the answer block JSONs with the generated responses.
+#     """
+#     answer_block_suffix = "_wave4_Q_wave4_A.json"
+#     answer_block_filename = f"{persona_id}{answer_block_suffix}"
+#     answer_block_path = os.path.join(question_json_base_dir, answer_block_filename)
+
+#     if not os.path.exists(answer_block_path):
+#         print(f"Warning: Answer block file not found at {answer_block_path} for persona {persona_id}. Skipping.")
+#         return False
+
+#     # 4. Construct response file path (we already confirmed it exists)
+#     response_filename = f"{persona_id}_response.json"
+#     response_file_path = os.path.join(simulation_output_dir, persona_id, response_filename)
+
+#     # 5. Load the simulation response data
+#     with open(response_file_path, 'r', encoding='utf-8') as f:
+#         simulation_response_data = json.load(f)
+
+#     # 6. Update the answer block JSON
+#     success = update_question_json_with_response(
+#         persona_id,
+#         answer_block_path,
+#         simulation_response_data,
+#         output_updated_questions_dir
+#     )
+#     return success
+
+def postprocess_simulation_outputs_with_pid(question_id, simulation_output_dir, question_json_base_dir, output_updated_questions_dir):
     """
     Finds existing simulation outputs, matches them with original answer block JSONs,
     and updates the answer block JSONs with the generated responses.
+    Compatible with nested structure:
+        ./text_simulation_output_with_context/pid_574/pid_574_sim001/pid_574_sim001_response.json
     """
     answer_block_suffix = "_wave4_Q_wave4_A.json"
-    answer_block_filename = f"{persona_id}{answer_block_suffix}"
-    answer_block_path = os.path.join(question_json_base_dir, answer_block_filename)
 
+    # ① 支持 simulation id（如 pid_574_sim001）
+    base_pid = question_id.split("_sim")[0]
+    persona_id=base_pid
+    answer_block_filename = f"{question_id}{answer_block_suffix}"
+    base_answer_block_filename = f"{base_pid}{answer_block_suffix}"
+
+    # ② 查找 simulation 对应的 answer block json（若无则复制 base）
+    answer_block_path = os.path.join(question_json_base_dir, answer_block_filename)
+    base_answer_block_path = os.path.join(question_json_base_dir, base_answer_block_filename)
     if not os.path.exists(answer_block_path):
-        print(f"Warning: Answer block file not found at {answer_block_path} for persona {persona_id}. Skipping.")
+        if os.path.exists(base_answer_block_path):
+            import shutil
+            shutil.copy(base_answer_block_path, answer_block_path)
+            print(f"[Info] Copied base answer block to {answer_block_path}")
+        else:
+            print(f"Warning: Neither {answer_block_path} nor base {base_answer_block_path} found for {base_id}. Skipping.")
+            return False
+
+    # ③ 查找 simulation 的 response 文件
+    # e.g. ./text_simulation_output_with_context/pid_574/pid_574_sim001/pid_574_sim001_response.json
+    response_filename = f"{question_id}_response.json"
+    response_file_path = os.path.join(simulation_output_dir, base_pid, question_id, response_filename)
+    if not os.path.exists(response_file_path):
+        print(f"Warning: Response file not found at {response_file_path} for persona {base_id}. Skipping.")
         return False
 
-    # 4. Construct response file path (we already confirmed it exists)
-    response_filename = f"{persona_id}_response.json"
-    response_file_path = os.path.join(simulation_output_dir, persona_id, response_filename)
+    # ④ 加载 LLM response
+    try:
+        with open(response_file_path, 'r', encoding='utf-8') as f:
+            simulation_response_data = json.load(f)
+    except Exception as e:
+        print(f"Error reading response JSON for {base_id}: {e}")
+        return False
 
-    # 5. Load the simulation response data
-    with open(response_file_path, 'r', encoding='utf-8') as f:
-        simulation_response_data = json.load(f)
+    # ⑤ 创建 simulation 专属输出目录
+    sim_output_dir = os.path.join(output_updated_questions_dir, base_pid, question_id)
+    os.makedirs(sim_output_dir, exist_ok=True)
 
-    # 6. Update the answer block JSON
+    # ⑥ 调用 update_question_json_with_response
     success = update_question_json_with_response(
-        persona_id,
+        question_id,
         answer_block_path,
         simulation_response_data,
-        output_updated_questions_dir
+        sim_output_dir
     )
+    if success:
+        print(f"[Verified ✅] Updated {persona_id} → {sim_output_dir}")
+    else:
+        print(f"[❌ Verification failed] {persona_id}")
     return success
+
 
 def postprocess_simulation_outputs(simulation_output_dir, question_json_base_dir, output_updated_questions_dir):
     """

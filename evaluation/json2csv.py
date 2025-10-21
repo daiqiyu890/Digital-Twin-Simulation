@@ -494,65 +494,153 @@ class JSONToCSVConverter:
         """Validate configuration has required fields."""
         if 'waves' not in config:
             raise ValueError("Configuration must contain 'waves' section")
+            
+    # def process_wave(self, wave_name: str, wave_config: dict) -> Optional[Dict[str, pd.DataFrame]]:
+    #     """
+    #     Process a single wave using the original logic
         
+    #     Returns dict with 'numeric' and 'text' DataFrames
+    #     """
+    #     input_pattern = wave_config.get('input_pattern')
+    #     if not input_pattern:
+    #         logger.warning(f"No input pattern specified for {wave_name}")
+    #         return None
+            
+    #     # Get actual files matching the pattern
+    #     full_pattern = input_pattern.replace('{pid}', '*')
+    #     json_files = sorted(glob.glob(full_pattern))
+        
+    #     if not json_files:
+    #         logger.warning(f"No files found matching pattern: {full_pattern}")
+    #         return None
+            
+    #     logger.info(f"Found {len(json_files)} files to process")
+        
+    #     # Apply max_personas limit if set
+    #     if self.config.get('max_personas'):
+    #         json_files = json_files[:self.config['max_personas']]
+    #         logger.info(f"Limited to {len(json_files)} files due to max_personas setting")
+        
+    #     # Process each JSON file and extract answers in both formats
+    #     all_numeric_answers = []
+    #     all_text_answers = []
+        
+    #     numeric_extractor = AnswerExtractor(ExtractionMode.NUMERIC)
+    #     text_extractor = AnswerExtractor(ExtractionMode.TEXT)
+        
+    #     for json_file in json_files:
+    #         # Extract numeric answers
+    #         numeric_answers = numeric_extractor.extract_from_file(json_file, include_text_labels=False)
+    #         if numeric_answers:
+    #             all_numeric_answers.append(numeric_answers)
+            
+    #         # Extract text answers
+    #         text_answers = text_extractor.extract_from_file(json_file)
+    #         if text_answers:
+    #             all_text_answers.append(text_answers)
+        
+    #     if not all_numeric_answers:
+    #         logger.warning(f"No valid answers extracted for {wave_name}")
+    #         return None
+        
+    #     # Convert to DataFrames
+    #     df_numeric = pd.DataFrame(all_numeric_answers)
+    #     df_text = pd.DataFrame(all_text_answers)
+        
+    #     # Return both DataFrames in a dictionary
+    #     return {
+    #         'numeric': df_numeric,
+    #         'text': df_text
+    #     }
+
+
     def process_wave(self, wave_name: str, wave_config: dict) -> Optional[Dict[str, pd.DataFrame]]:
         """
-        Process a single wave using the original logic
-        
-        Returns dict with 'numeric' and 'text' DataFrames
+        Unified process_wave that supports both single-file (human) and multi-simulation (LLM) patterns.
+        Combines all persona-level data into one DataFrame (assumes one row per persona).
         """
         input_pattern = wave_config.get('input_pattern')
         if not input_pattern:
             logger.warning(f"No input pattern specified for {wave_name}")
             return None
-            
-        # Get actual files matching the pattern
+
+        # Expand wildcards and search recursively
         full_pattern = input_pattern.replace('{pid}', '*')
-        json_files = sorted(glob.glob(full_pattern))
-        
+        json_files = sorted(glob.glob(full_pattern, recursive=True))
         if not json_files:
             logger.warning(f"No files found matching pattern: {full_pattern}")
             return None
-            
-        logger.info(f"Found {len(json_files)} files to process")
-        
-        # Apply max_personas limit if set
+
+        logger.info(f"Found {len(json_files)} files for wave {wave_name}")
+
+        # Apply max_personas limit
         if self.config.get('max_personas'):
-            json_files = json_files[:self.config['max_personas']]
-            logger.info(f"Limited to {len(json_files)} files due to max_personas setting")
-        
-        # Process each JSON file and extract answers in both formats
-        all_numeric_answers = []
-        all_text_answers = []
-        
+            persona_ids = sorted({re.search(r'(pid_\d+)', f).group(1) for f in json_files if re.search(r'(pid_\d+)', f)})
+            persona_ids = persona_ids[:self.config['max_personas']]
+            json_files = [f for f in json_files if any(pid in f for pid in persona_ids)]
+            logger.info(f"Limited to {len(persona_ids)} personas (max_personas={self.config['max_personas']})")
+
         numeric_extractor = AnswerExtractor(ExtractionMode.NUMERIC)
         text_extractor = AnswerExtractor(ExtractionMode.TEXT)
-        
-        for json_file in json_files:
-            # Extract numeric answers
-            numeric_answers = numeric_extractor.extract_from_file(json_file, include_text_labels=False)
-            if numeric_answers:
-                all_numeric_answers.append(numeric_answers)
-            
-            # Extract text answers
-            text_answers = text_extractor.extract_from_file(json_file)
-            if text_answers:
-                all_text_answers.append(text_answers)
-        
-        if not all_numeric_answers:
-            logger.warning(f"No valid answers extracted for {wave_name}")
+
+        # Group by persona
+        from collections import defaultdict
+        persona_groups = defaultdict(list)
+        for f in json_files:
+            match = re.search(r'(pid_\d+)', f)
+            if match:
+                persona_groups[match.group(1)].append(f)
+
+        # Output folder
+        output_root = Path(self.config["trial_dir"]) / f"csv_persona_level_{wave_name}"
+        output_root.mkdir(parents=True, exist_ok=True)
+
+        all_numeric, all_text = [], []
+
+        for pid, files in persona_groups.items():
+            persona_numeric, persona_text = [], []
+            for json_path in files:
+                sim_match = re.search(r'(pid_\d+_sim\d+)', json_path)
+                sim_id = sim_match.group(1) if sim_match else pid
+
+                numeric_ans = numeric_extractor.extract_from_file(json_path)
+                text_ans = text_extractor.extract_from_file(json_path)
+                if numeric_ans:
+                    numeric_ans.update({"PERSONA_ID": pid, "SIMULATION_ID": sim_id})
+                    persona_numeric.append(numeric_ans)
+                if text_ans:
+                    text_ans.update({"PERSONA_ID": pid, "SIMULATION_ID": sim_id})
+                    persona_text.append(text_ans)
+
+            if not persona_numeric:
+                logger.warning(f"No valid answers extracted for {pid}")
+                continue
+
+            df_numeric = pd.DataFrame(persona_numeric)
+            df_text = pd.DataFrame(persona_text)
+            df_numeric.to_csv(output_root / f"{pid}.csv", index=False)
+            logger.info(f"✅ Saved {len(df_numeric)} rows for {pid}")
+
+            all_numeric.append(df_numeric)
+            all_text.append(df_text)
+
+        # Merge all persona-level data
+        if not all_numeric:
+            logger.warning(f"No persona data found for {wave_name}")
             return None
-        
-        # Convert to DataFrames
-        df_numeric = pd.DataFrame(all_numeric_answers)
-        df_text = pd.DataFrame(all_text_answers)
-        
-        # Return both DataFrames in a dictionary
-        return {
-            'numeric': df_numeric,
-            'text': df_text
-        }
-    
+
+        df_all_numeric = pd.concat(all_numeric, ignore_index=True)
+        df_all_text = pd.concat(all_text, ignore_index=True) if all_text else pd.DataFrame()
+
+        # Sort by PERSONA_ID (first column)
+        if "PERSONA_ID" in df_all_numeric.columns:
+            df_all_numeric.sort_values(by="PERSONA_ID", inplace=True)
+
+        logger.info(f"✅ Combined {len(df_all_numeric)} personas into single DataFrame for wave {wave_name}")
+        return {"numeric": df_all_numeric, "text": df_all_text}
+
+
+
                         
     def format_to_benchmark(self, df: pd.DataFrame, benchmark_csv: str, 
                           column_mapping_file: Optional[str] = None) -> pd.DataFrame:
@@ -1270,3 +1358,6 @@ def _save_dataframe(df: pd.DataFrame, output_path: str, description: str, add_de
 if __name__ == "__main__":
     import sys
     sys.exit(main())
+
+
+

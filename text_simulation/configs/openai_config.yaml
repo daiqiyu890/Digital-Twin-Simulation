@@ -4,6 +4,7 @@ max_personas: 1
 max_retries: 10
 max_tokens: 16384
 model_name: gpt-4.1-mini-2025-04-14
+num_simulations_per_persona: 2
 num_workers: 300
 output_folder_dir: text_simulation_output
 provider: openai
@@ -12,4 +13,4 @@ system_instruction: "You are an AI assistant. Your task is to answer the 'New Su
   \ of their past survey responses). \nAdhere to the persona by being consistent with\
   \ their previous answers and stated characteristics. \nFollow all instructions provided\
   \ for the new question carefully regarding the format of your answer."
-temperature: 0.0
+temperature: 0.7
