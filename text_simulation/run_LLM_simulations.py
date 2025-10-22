@@ -102,7 +102,7 @@ def save_and_verify_callback(prompt_id: str, llm_response_data: dict, original_p
         return False
 
 
-async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, provider, num_workers, max_retries_for_sequence, force_regenerate, max_personas=None,num_simulations_per_persona=100):
+async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, provider, num_workers, max_retries_for_sequence, force_regenerate, max_personas=None,num_simulations_per_persona=None,selected_pids=None):
     question_json_base_dir_for_verify = "./data/mega_persona_json/answer_blocks" 
     output_updated_questions_dir_for_verify = os.path.join(base_output_dir, "answer_blocks_llm_imputed")
 
@@ -138,9 +138,15 @@ async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, 
     for prompt_filename in prompt_files_fs:
         persona_match = re.search(r'(pid_\d+)', prompt_filename)
         if persona_match:
-            persona_id = persona_match.group(1)
-            full_prompt_path = os.path.join(prompts_root_dir, prompt_filename)
-            all_prompt_files_info.append({'persona_id': persona_id, 'file_path': full_prompt_path})
+           persona_id = persona_match.group(1)
+
+           # ✅ Skip if --pids filter is provided and this persona is not included
+           if selected_pids and persona_id not in selected_pids:
+              continue
+
+           full_prompt_path = os.path.join(prompts_root_dir, prompt_filename)
+           all_prompt_files_info.append({'persona_id': persona_id, 'file_path': full_prompt_path})
+
 
     if not all_prompt_files_info:
         print(f"No prompt files (ending with '_prompt.txt') found in {prompts_root_dir}")
@@ -243,9 +249,19 @@ if __name__ == "__main__":
     parser.add_argument("--config", required=True, help="Path to the YAML configuration file.")
     parser.add_argument("--max_personas", type=int, help="Maximum number of personas to process")
     parser.add_argument("--num_simulations_per_persona", type=int, default=None, help="Number of simulations per persona (e.g., 100)")
+    parser.add_argument("--pids", type=str, default=None, help="Comma-separated persona IDs to run (e.g., pid_001,pid_002)")
+
 
     args = parser.parse_args()
     config_values = load_config(args.config)
+
+    # Parse specific personas if provided
+   if args.pids:
+      selected_pids = [p.strip() for p in args.pids.split(",") if p.strip()]
+      print(f"🔍 Running simulations only for: {', '.join(selected_pids)}")
+   else:
+      selected_pids = None
+
     
     prompts_root_dir = config_values.get('input_folder_dir', './text_simulation_input_with_context')
     base_output_dir = config_values.get('output_folder_dir', './text_simulation_output_with_context')
@@ -289,7 +305,8 @@ if __name__ == "__main__":
         max_retries_for_sequence=max_retries_for_sequence,
         force_regenerate=force_regenerate,
         max_personas=max_personas,
-        num_simulations_per_persona=num_simulations_per_persona
+        num_simulations_per_persona=num_simulations_per_persona,
+        selected_pids=selected_pids
     )) 
 
 

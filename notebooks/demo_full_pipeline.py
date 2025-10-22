@@ -243,6 +243,57 @@ except Exception as e:
     print(f"❌ Error creating simulation input: {e}")
 
 
+# Step 7: Pre-check — Identify complete / incomplete personas
+print("=" * 60)
+print("Pre-check: Determine complete and incomplete personas")
+print("=" * 60)
+
+output_sim_dir = project_root / "text_simulation" / "text_simulation_output"
+
+# Count how many simulations exist for each persona
+pid_sim_counts = {}
+if output_sim_dir.exists():
+    for pid_dir in output_sim_dir.iterdir():
+        if pid_dir.is_dir() and pid_dir.name.startswith("pid_"):
+            sim_dirs = [d for d in pid_dir.iterdir() if d.is_dir() and "sim" in d.name]
+            pid_sim_counts[pid_dir.name] = len(sim_dirs)
+
+complete_pids = []
+incomplete_pids = []
+new_pids = []
+
+# All persona JSON files (the source list)
+json_files = [
+    f for f in os.listdir(project_root / "data" / "mega_persona_json" / "mega_persona")
+    if f.endswith(".json") and f.startswith("pid_")
+][:MAX_PERSONAS]
+
+for f in json_files:
+    pid = f.replace(".json", "")
+    count = pid_sim_counts.get(pid, 0)
+
+    if count == 0:
+        print(f"🆕 {pid}: no simulations yet → will run {NUM_SIMULATIONS_PER_PERSONA}")
+        new_pids.append(pid)
+    elif count < NUM_SIMULATIONS_PER_PERSONA:
+        remaining = NUM_SIMULATIONS_PER_PERSONA - count
+        print(f"⚠️ {pid}: {count}/{NUM_SIMULATIONS_PER_PERSONA} done → will run {remaining} more")
+        incomplete_pids.append(pid)
+    else:
+        print(f"✅ {pid}: {count}/{NUM_SIMULATIONS_PER_PERSONA} complete → skip")
+        complete_pids.append(pid)
+
+# Personas that still need runs
+pids_to_run = new_pids + incomplete_pids
+if not pids_to_run:
+    print("\n🎉 All personas complete — skipping simulation stage.\n")
+    skip_simulations = True
+else:
+    skip_simulations = False
+    print(f"\n🚀 Need to run simulations for {len(pids_to_run)} personas:")
+    print(", ".join(pids_to_run))
+
+
 #Step 8: Run LLM simulations
 # Display current configuration
 config_path = project_root / "text_simulation" / "configs" / "openai_config.yaml"
@@ -265,43 +316,66 @@ print("\nRunning LLM simulations...")
 print("This may take a few minutes depending on the number of personas and API rate limits.\n")
 
 # Use subprocess to run the simulation with proper Python path
-import subprocess
+if skip_simulations:
+    print("✅ All personas already finished. Skipping simulation step.")
+else:
+    print("=" * 60)
+    print("Step 8: Run LLM Simulations (Only for incomplete personas)")
+    print("=" * 60)
 
-# Set up environment with proper PYTHONPATH
-env = os.environ.copy()
-env['PYTHONPATH'] = str(project_root) + os.pathsep + str(project_root / 'text_simulation') + os.pathsep + env.get('PYTHONPATH', '')
+    print("\nRunning simulations for:")
+    print(", ".join(pids_to_run))
+    print()
 
-# Run the simulation script
-process = subprocess.Popen(
-    [
-        sys.executable, 
-        str(project_root / "text_simulation" / "run_LLM_simulations.py"),
-        "--config", str(project_root / "text_simulation" / "configs" / "openai_config.yaml"),
-        "--max_personas", str(MAX_PERSONAS),
-        "--num_simulations_per_persona", str(NUM_SIMULATIONS_PER_PERSONA)
-    ],
-    cwd=str(project_root),
-    env=env,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    text=True
-)
+    import subprocess
 
-# Stream output
-try:
-    for line in process.stdout:
-        print(line.rstrip())
-    
-    process.wait()
-    
-    if process.returncode == 0:
-        print("\n✅ Simulations completed successfully")
-    else:
-        print(f"\n❌ Error running simulations (exit code: {process.returncode})")
-except KeyboardInterrupt:
-    print("\n⚠️  Simulation interrupted by user")
-    process.terminate()
-    process.wait()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = (
+        str(project_root)
+        + os.pathsep
+        + str(project_root / "text_simulation")
+        + os.pathsep
+        + env.get("PYTHONPATH", "")
+    )
+
+    # pass the list of PIDs as a comma-separated string
+    pid_arg = ",".join(pids_to_run)
+
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(project_root / "text_simulation" / "run_LLM_simulations.py"),
+            "--config",
+            str(project_root / "text_simulation" / "configs" / "openai_config.yaml"),
+            "--max_personas",
+            str(MAX_PERSONAS),
+            "--num_simulations_per_persona",
+            str(NUM_SIMULATIONS_PER_PERSONA),
+            "--pids",
+            pid_arg,  # <-- new argument
+        ],
+        cwd=str(project_root),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    try:
+        for line in process.stdout:
+            print(line.rstrip())
+
+        process.wait()
+        if process.returncode == 0:
+            print("\n✅ Simulations for incomplete personas completed successfully.")
+        else:
+            print(f"\n❌ Error running simulations (exit code: {process.returncode})")
+
+    except KeyboardInterrupt:
+        print("\n⚠️ Simulation interrupted by user")
+        process.terminate()
+        process.wait()
+
 
 
 #Step 8: Examine Simulation Results
