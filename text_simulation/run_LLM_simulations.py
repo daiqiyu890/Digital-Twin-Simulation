@@ -191,10 +191,29 @@ async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, 
             print(f"Error reading prompt file {f_path} for {p_id}: {e}")
             continue
 
-        # 🔁 对每个 persona 进行多次 simulation（例如 100 次）
-        for sim_idx in range(1, num_simulations_per_persona + 1):
-            sim_id = f"{p_id}_sim{sim_idx:03d}"  # e.g. pid_574_sim001
+        # ✅ 检查已有 simulation 文件夹，决定从哪里开始补跑
+        persona_output_dir = os.path.join(base_output_dir, p_id)
+        existing_sim_dirs = []
+        if os.path.exists(persona_output_dir):
+            existing_sim_dirs = [
+                d for d in os.listdir(persona_output_dir)
+                if d.startswith(f"{p_id}_sim")
+            ]
+
+        already_completed = len(existing_sim_dirs)
+        remaining_to_run = max(0, num_simulations_per_persona - already_completed)
+
+        if already_completed >= num_simulations_per_persona:
+            print(f"✅ {p_id}: already has {already_completed}/{num_simulations_per_persona} simulations, skipping.")
+            continue
+        else:
+            print(f"🧩 {p_id}: {already_completed} simulations found, will run {remaining_to_run} more.")
+
+        # 🔁 从下一个未完成的 simulation 序号开始
+        for sim_idx in range(already_completed + 1, num_simulations_per_persona + 1):
+            sim_id = f"{p_id}_sim{sim_idx:03d}"  # e.g. pid_574_sim021
             prompts_to_process_for_llm.append((sim_id, prompt_content))
+
 
     print(f"Prepared {len(prompts_to_process_for_llm)} total simulations "
       f"({num_simulations_per_persona} per persona).")
@@ -256,11 +275,11 @@ if __name__ == "__main__":
     config_values = load_config(args.config)
 
     # Parse specific personas if provided
-   if args.pids:
-      selected_pids = [p.strip() for p in args.pids.split(",") if p.strip()]
-      print(f"🔍 Running simulations only for: {', '.join(selected_pids)}")
-   else:
-      selected_pids = None
+    if args.pids:
+       selected_pids = [p.strip() for p in args.pids.split(",") if p.strip()]
+       print(f"🔍 Running simulations only for: {', '.join(selected_pids)}")
+    else:
+       selected_pids = None
 
     
     prompts_root_dir = config_values.get('input_folder_dir', './text_simulation_input_with_context')

@@ -14,7 +14,7 @@ from full_pipeline_utils import *
 
 #set up the open AI key
 import os
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = "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"
 
 # Direct path setup - adjust this path if your project is in a different location
 PROJECT_ROOT_PATH = "/Users/qiyudai/Documents/Github/Digital-Twin-Simulation"
@@ -37,12 +37,20 @@ if not (project_root / 'evaluation').exists():
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-#clean existing results
-# clean_simulation_dirs(project_root, confirm=True)
+#clean existing csv files
+clean_simulation_dirs(project_root, confirm=True)
+
+#clean existing files with error
+clean_error_simulations_no_confirm(output_root=project_root/"text_simulation/text_simulation_output")
+
+#duplicate current results to dropbox
+src_folder= project_root / "text_simulation/text_simulation_output"
+dst_folder="/Users/qiyudai/Dropbox/research_projects/LLM/output_back_up"
+duplicate_folder(src_folder, dst_folder, overwrite=True)
 
 # Configuration
-MAX_PERSONAS = 1  # Limit for demo purposes
-NUM_SIMULATIONS_PER_PERSONA=2
+MAX_PERSONAS = 200  # Limit for demo purposes
+NUM_SIMULATIONS_PER_PERSONA=50
 
 print(f"✅ Project root: {project_root}")
 print(f"Current directory: {Path.cwd()}")
@@ -285,6 +293,7 @@ for f in json_files:
 
 # Personas that still need runs
 pids_to_run = new_pids + incomplete_pids
+pids_to_run = [pid.replace("_mega_persona", "") for pid in pids_to_run]
 if not pids_to_run:
     print("\n🎉 All personas complete — skipping simulation stage.\n")
     skip_simulations = True

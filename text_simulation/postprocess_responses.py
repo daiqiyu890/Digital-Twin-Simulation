@@ -377,61 +377,62 @@ def postprocess_simulation_outputs_with_pid(question_id, simulation_output_dir, 
     """
     Finds existing simulation outputs, matches them with original answer block JSONs,
     and updates the answer block JSONs with the generated responses.
-    Compatible with nested structure:
+
+    Example expected structure:
         ./text_simulation_output_with_context/pid_574/pid_574_sim001/pid_574_sim001_response.json
+        ./data/mega_persona_json/answer_blocks/pid_574_wave4_Q_wave4_A.json
+        ↓
+        ./text_simulation_output_with_context/answer_blocks_llm_imputed/pid_574/pid_574_sim001/pid_574_sim001_wave4_Q_wave4_A.json
     """
+    import os, json
+
     answer_block_suffix = "_wave4_Q_wave4_A.json"
 
-    # ① 支持 simulation id（如 pid_574_sim001）
+    # ① 解析 simulation id，例如 "pid_574_sim001"
     base_pid = question_id.split("_sim")[0]
-    persona_id=base_pid
-    answer_block_filename = f"{question_id}{answer_block_suffix}"
-    base_answer_block_filename = f"{base_pid}{answer_block_suffix}"
+    persona_id = base_pid
 
-    # ② 查找 simulation 对应的 answer block json（若无则复制 base）
-    answer_block_path = os.path.join(question_json_base_dir, answer_block_filename)
-    base_answer_block_path = os.path.join(question_json_base_dir, base_answer_block_filename)
-    if not os.path.exists(answer_block_path):
-        if os.path.exists(base_answer_block_path):
-            import shutil
-            shutil.copy(base_answer_block_path, answer_block_path)
-            print(f"[Info] Copied base answer block to {answer_block_path}")
-        else:
-            print(f"Warning: Neither {answer_block_path} nor base {base_answer_block_path} found for {base_id}. Skipping.")
-            return False
+    # 构造模板文件路径（base 模板）
+    base_answer_block_path = os.path.join(question_json_base_dir, f"{base_pid}{answer_block_suffix}")
+    if not os.path.exists(base_answer_block_path):
+        print(f"⚠️ Base answer block not found: {base_answer_block_path}")
+        return False
 
-    # ③ 查找 simulation 的 response 文件
-    # e.g. ./text_simulation_output_with_context/pid_574/pid_574_sim001/pid_574_sim001_response.json
+    # ② 查找 simulation 的 LLM 输出文件
     response_filename = f"{question_id}_response.json"
     response_file_path = os.path.join(simulation_output_dir, base_pid, question_id, response_filename)
     if not os.path.exists(response_file_path):
-        print(f"Warning: Response file not found at {response_file_path} for persona {base_id}. Skipping.")
+        print(f"⚠️ Response file not found at {response_file_path}")
         return False
 
-    # ④ 加载 LLM response
+    # ③ 加载 LLM 输出
     try:
         with open(response_file_path, 'r', encoding='utf-8') as f:
             simulation_response_data = json.load(f)
     except Exception as e:
-        print(f"Error reading response JSON for {base_id}: {e}")
+        print(f"❌ Error reading response JSON for {persona_id}: {e}")
         return False
 
-    # ⑤ 创建 simulation 专属输出目录
+    # ④ 创建 simulation 专属输出目录
     sim_output_dir = os.path.join(output_updated_questions_dir, base_pid, question_id)
     os.makedirs(sim_output_dir, exist_ok=True)
 
-    # ⑥ 调用 update_question_json_with_response
+    # ⑤ 调用核心更新函数：将 LLM 的回答写入模板问卷中
     success = update_question_json_with_response(
         question_id,
-        answer_block_path,
+        base_answer_block_path,     # ✅ 直接使用 base 模板
         simulation_response_data,
-        sim_output_dir
+        sim_output_dir              # ✅ 输出到 imputed 结果目录
     )
+
+    # ⑥ 打印结果
     if success:
         print(f"[Verified ✅] Updated {persona_id} → {sim_output_dir}")
     else:
         print(f"[❌ Verification failed] {persona_id}")
+
     return success
+
 
 
 def postprocess_simulation_outputs(simulation_output_dir, question_json_base_dir, output_updated_questions_dir):
