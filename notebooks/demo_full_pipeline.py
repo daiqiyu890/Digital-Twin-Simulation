@@ -41,7 +41,9 @@ if str(project_root) not in sys.path:
 clean_simulation_dirs(project_root, confirm=True)
 
 #clean existing files with error
-clean_error_simulations_no_confirm(output_root=project_root/"text_simulation/text_simulation_output")
+missing_info = clean_error_simulations_no_confirm(
+    output_root=project_root / "text_simulation" / "text_simulation_output"
+)
 
 #duplicate current results to dropbox
 src_folder= project_root / "text_simulation/text_simulation_output"
@@ -257,6 +259,7 @@ print("Pre-check: Determine complete and incomplete personas")
 print("=" * 60)
 
 output_sim_dir = project_root / "text_simulation" / "text_simulation_output"
+
 
 # Count how many simulations exist for each persona
 pid_sim_counts = {}

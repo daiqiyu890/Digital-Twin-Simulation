@@ -191,7 +191,7 @@ async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, 
             print(f"Error reading prompt file {f_path} for {p_id}: {e}")
             continue
 
-        # ✅ 检查已有 simulation 文件夹，决定从哪里开始补跑
+        # ✅ 检查已有 simulation 文件夹，决定补跑哪些缺号
         persona_output_dir = os.path.join(base_output_dir, p_id)
         existing_sim_dirs = []
         if os.path.exists(persona_output_dir):
@@ -200,17 +200,31 @@ async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, 
                 if d.startswith(f"{p_id}_sim")
             ]
 
-        already_completed = len(existing_sim_dirs)
-        remaining_to_run = max(0, num_simulations_per_persona - already_completed)
+        # 提取已有编号，例如 [1, 2, 5, 6]
+        existing_nums = sorted([
+            int(re.search(r"_sim(\d+)", d).group(1))
+            for d in existing_sim_dirs if re.search(r"_sim(\d+)", d)
+        ])
 
-        if already_completed >= num_simulations_per_persona:
-            print(f"✅ {p_id}: already has {already_completed}/{num_simulations_per_persona} simulations, skipping.")
+        # 计算应该存在的完整编号范围
+        expected_nums = set(range(1, num_simulations_per_persona + 1))
+        existing_set = set(existing_nums)
+
+        # 找出缺号
+        missing_nums = sorted(list(expected_nums - existing_set))
+
+        if not missing_nums:
+            print(f"✅ {p_id}: already has all {num_simulations_per_persona} simulations, skipping.")
             continue
         else:
-            print(f"🧩 {p_id}: {already_completed} simulations found, will run {remaining_to_run} more.")
+            preview = ", ".join(str(x) for x in missing_nums[:10])
+            if len(missing_nums) > 10:
+                preview += ", ..."
+            print(f"🧩 {p_id}: missing simulations [{preview}]")
+            print(f"   Will run {len(missing_nums)} new simulations.")
 
-        # 🔁 从下一个未完成的 simulation 序号开始
-        for sim_idx in range(already_completed + 1, num_simulations_per_persona + 1):
+        # 为缺号生成 sim_id
+        for sim_idx in missing_nums:
             sim_id = f"{p_id}_sim{sim_idx:03d}"  # e.g. pid_574_sim021
             prompts_to_process_for_llm.append((sim_id, prompt_content))
 

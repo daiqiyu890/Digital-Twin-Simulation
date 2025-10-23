@@ -155,10 +155,9 @@ def detect_error_simulations(output_root: str):
 
 def clean_error_simulations_no_confirm(output_root: str):
     """
-    Automatically detect and delete all simulation folders
-    that contain files with 'error' in their names.
-    If a persona folder becomes empty after deletion, delete it too.
-    After cleaning, renumber remaining simulation folders sequentially (sim001, sim002, ...).
+    Detect and delete simulation folders containing 'error' files.
+    Additionally, detect missing simulation numbers (e.g., if 1,2,5 exist → detect 3,4 missing).
+    Does NOT rename folders.
 
     Parameters
     ----------
@@ -167,27 +166,29 @@ def clean_error_simulations_no_confirm(output_root: str):
 
     Returns
     -------
-    pd.DataFrame
-        DataFrame of deleted simulation folders with columns:
-        ['persona_id', 'sim_folder', 'deleted_path', 'error_files']
+    dict
+        {
+            "deleted_df": pd.DataFrame([...]),
+            "missing_sims": dict(pid_xxx -> [missing_indices])
+        }
     """
     output_root = Path(output_root)
     deleted_records = []
+    missing_sims_dict = {}
 
     if not output_root.exists():
         raise FileNotFoundError(f"❌ Output folder not found: {output_root}")
 
-    print(f"🔍 Scanning for error-containing simulations in: {output_root}\n")
+    print(f"🔍 Scanning for error-containing or missing simulations in: {output_root}\n")
 
-    # iterate through persona directories
     for pid_dir in sorted(output_root.glob("pid_*")):
         if not pid_dir.is_dir():
             continue
-        
+
         persona_id = pid_dir.name
         sim_dirs = [d for d in pid_dir.iterdir() if d.is_dir() and "sim" in d.name]
 
-        # --- Step 1: detect and delete error simulations ---
+        # --- Step 1: detect & delete error-containing simulations ---
         for sim_dir in sim_dirs:
             error_files = [f.name for f in sim_dir.glob("*") if "error" in f.name.lower()]
             if error_files:
@@ -198,35 +199,12 @@ def clean_error_simulations_no_confirm(output_root: str):
                     "error_files": ", ".join(error_files)
                 }
                 deleted_records.append(record)
-
                 try:
                     shutil.rmtree(sim_dir)
                     print(f"🗑️ Deleted {sim_dir.name} (found: {record['error_files']})")
                 except Exception as e:
                     print(f"❌ Failed to delete {sim_dir}: {e}")
 
-        # --- Step 2: delete empty persona folder if needed ---
-        remaining_dirs = [d for d in pid_dir.iterdir() if d.is_dir()]
-        if not remaining_dirs:
-            try:
-                shutil.rmtree(pid_dir)
-                print(f"🧹 Deleted empty persona folder: {persona_id}")
-                continue  # skip renaming for deleted personas
-            except Exception as e:
-                print(f"❌ Failed to delete persona folder {persona_id}: {e}")
-                continue
-
-        # --- Step 3: renumber remaining sim folders sequentially ---
-        remaining_dirs = sorted([d for d in pid_dir.iterdir() if d.is_dir() and "sim" in d.name])
-        for new_idx, sim_dir in enumerate(remaining_dirs, start=1):
-            new_name = f"{persona_id}_sim{new_idx:03d}"
-            new_path = pid_dir / new_name
-            if sim_dir.name != new_name:
-                try:
-                    sim_dir.rename(new_path)
-                    print(f"🔢 Renamed {sim_dir.name} → {new_name}")
-                except Exception as e:
-                    print(f"❌ Failed to rename {sim_dir.name}: {e}")
 
     # --- Step 4: summary ---
     df_deleted = pd.DataFrame(deleted_records)
@@ -235,5 +213,7 @@ def clean_error_simulations_no_confirm(output_root: str):
     else:
         print("✅ No error-containing simulations found.")
 
-    return df_deleted
 
+    return {
+        "deleted_df": df_deleted
+    }
