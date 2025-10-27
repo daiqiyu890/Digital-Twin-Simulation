@@ -14,7 +14,7 @@ from full_pipeline_utils import *
 
 #set up the open AI key
 import os
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = "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"
 
 # Direct path setup - adjust this path if your project is in a different location
 PROJECT_ROOT_PATH = "/Users/qiyudai/Documents/Github/Digital-Twin-Simulation"
@@ -51,8 +51,8 @@ dst_folder="/Users/qiyudai/Dropbox/research_projects/LLM/output_back_up"
 duplicate_folder(src_folder, dst_folder, overwrite=True)
 
 # Configuration
-MAX_PERSONAS = 2  # Limit for demo purposes
-NUM_SIMULATIONS_PER_PERSONA=4
+MAX_PERSONAS = 30  # Limit for demo purposes
+NUM_SIMULATIONS_PER_PERSONA=1
 
 print(f"✅ Project root: {project_root}")
 print(f"Current directory: {Path.cwd()}")
