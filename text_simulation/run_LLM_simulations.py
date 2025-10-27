@@ -145,6 +145,8 @@ async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, 
               continue
 
            full_prompt_path = os.path.join(prompts_root_dir, prompt_filename)
+           abs_path = os.path.abspath(full_prompt_path)
+           print(f"🧭 Found prompt file for {persona_id}: {abs_path}")
            all_prompt_files_info.append({'persona_id': persona_id, 'file_path': full_prompt_path})
 
 
@@ -278,6 +280,8 @@ async def run_simulations(prompts_root_dir, base_output_dir, llm_config_params, 
 
 
 if __name__ == "__main__":
+    print("🔍 In subprocess, using cwd:", os.getcwd())
+
     parser = argparse.ArgumentParser(description="Run LLM simulations with integrated verification and retries.")
     parser.add_argument("--config", required=True, help="Path to the YAML configuration file.")
     parser.add_argument("--max_personas", type=int, help="Maximum number of personas to process")
@@ -300,6 +304,20 @@ if __name__ == "__main__":
     base_output_dir = config_values.get('output_folder_dir', './text_simulation_output_with_context')
     prompts_root_dir = os.path.join("./text_simulation", prompts_root_dir)
     base_output_dir = os.path.join("./text_simulation", base_output_dir)
+
+    # print("=" * 60)
+    # print("🔍 DEBUG PATH CHECK")
+    # print("=" * 60)
+    # print(f"🧭 Working directory: {os.getcwd()}")
+    # print(f"📂 prompts_root_dir (raw): {prompts_root_dir}")
+    # print(f"📂 base_output_dir (raw): {base_output_dir}")
+    # print(f"📂 prompts_root_dir (ABS): {os.path.abspath(prompts_root_dir)}")
+    # print(f"📂 base_output_dir (ABS): {os.path.abspath(base_output_dir)}")
+    # print(f"📁 Input dir exists? {os.path.exists(prompts_root_dir)}")
+    # print(f"📁 Output dir exists? {os.path.exists(base_output_dir)}")
+    # print("=" * 60)
+
+
     num_simulations_per_persona = config_values.get('num_simulations_per_persona', None)
     provider = config_values.get('provider', 'gemini')
     num_workers = config_values.get('num_workers', 5)

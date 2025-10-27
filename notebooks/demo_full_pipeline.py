@@ -1,4 +1,4 @@
-# cd /Users/qiyudai/Documents/Github/Digital-Twin-Simulation/notebooks
+# cd /Users/qiyudai/Documents/Github/Digital-Twin-Simulation
 # cd /home/users/s1155141616/Digital-Twin-Simulation/notebooks
 #Step1: Setup and Configuration
 
@@ -9,8 +9,10 @@ import json
 import yaml
 from pathlib import Path
 from dotenv import load_dotenv
+import pandas as pd
 import time
-from full_pipeline_utils import *
+from text_simulation.full_pipeline_utils import *
+
 
 #set up the open AI key
 import os
@@ -51,8 +53,8 @@ dst_folder="/Users/qiyudai/Dropbox/research_projects/LLM/output_back_up"
 duplicate_folder(src_folder, dst_folder, overwrite=True)
 
 # Configuration
-MAX_PERSONAS = 200  # Limit for demo purposes
-NUM_SIMULATIONS_PER_PERSONA=50
+MAX_PERSONAS = 2  # Limit for demo purposes
+NUM_SIMULATIONS_PER_PERSONA=1
 
 print(f"✅ Project root: {project_root}")
 print(f"Current directory: {Path.cwd()}")
@@ -352,6 +354,7 @@ else:
 
     # pass the list of PIDs as a comma-separated string
     pid_arg = ",".join(pids_to_run)
+    
 
     process = subprocess.Popen(
         [
@@ -388,6 +391,8 @@ else:
         process.terminate()
         process.wait()
 
+
+#Step 8: 统一把答案嵌入到问题里
 
 
 #Step 8: Examine Simulation Results
