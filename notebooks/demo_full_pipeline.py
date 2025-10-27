@@ -1,4 +1,4 @@
-# cd /Users/qiyudai/Documents/Github/Digital-Twin-Simulation
+# cd /Users/qiyudai/Documents/Github/Digital-Twin-Simulation/notebooks
 # cd /home/users/s1155141616/Digital-Twin-Simulation/notebooks
 #Step1: Setup and Configuration
 
@@ -9,10 +9,8 @@ import json
 import yaml
 from pathlib import Path
 from dotenv import load_dotenv
-import pandas as pd
 import time
-from text_simulation.full_pipeline_utils import *
-
+from full_pipeline_utils import *
 
 #set up the open AI key
 import os
@@ -54,7 +52,7 @@ duplicate_folder(src_folder, dst_folder, overwrite=True)
 
 # Configuration
 MAX_PERSONAS = 2  # Limit for demo purposes
-NUM_SIMULATIONS_PER_PERSONA=1
+NUM_SIMULATIONS_PER_PERSONA=4
 
 print(f"✅ Project root: {project_root}")
 print(f"Current directory: {Path.cwd()}")
@@ -308,7 +306,14 @@ else:
     print(", ".join(pids_to_run))
 
 
-#Step 8: Run LLM simulations
+# ============================================
+# Step 8: Run LLM Simulations (Sequential Mode)
+# ============================================
+
+import subprocess
+import time
+import datetime
+
 # Display current configuration
 config_path = project_root / "text_simulation" / "configs" / "openai_config.yaml"
 with open(config_path, 'r') as f:
@@ -321,28 +326,14 @@ print(f"  Max personas: {config['max_personas']}")
 print(f"  Workers: {config['num_workers']}")
 print(f"  Force regenerate: {config['force_regenerate']}")
 print(f"  Number of Simulations Per Persona: {config['num_simulations_per_persona']}")
-
 print("=" * 60)
-print("Step 6: Run LLM Simulations")
+print("Step 8: Run LLM Simulations (Sequential Mode)")
 print("=" * 60)
+print("\nThis will run each persona one-by-one to prevent rate-limit or batch failures.\n")
 
-print("\nRunning LLM simulations...")
-print("This may take a few minutes depending on the number of personas and API rate limits.\n")
-
-# Use subprocess to run the simulation with proper Python path
 if skip_simulations:
     print("✅ All personas already finished. Skipping simulation step.")
 else:
-    print("=" * 60)
-    print("Step 8: Run LLM Simulations (Only for incomplete personas)")
-    print("=" * 60)
-
-    print("\nRunning simulations for:")
-    print(", ".join(pids_to_run))
-    print()
-
-    import subprocess
-
     env = os.environ.copy()
     env["PYTHONPATH"] = (
         str(project_root)
@@ -352,47 +343,74 @@ else:
         + env.get("PYTHONPATH", "")
     )
 
-    # pass the list of PIDs as a comma-separated string
-    pid_arg = ",".join(pids_to_run)
-    
+    # ✅ Create log file
+    log_path = project_root / f"simulation_run_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_file = open(log_path, "w", encoding="utf-8")
 
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            str(project_root / "text_simulation" / "run_LLM_simulations.py"),
-            "--config",
-            str(project_root / "text_simulation" / "configs" / "openai_config.yaml"),
-            "--max_personas",
-            str(MAX_PERSONAS),
-            "--num_simulations_per_persona",
-            str(NUM_SIMULATIONS_PER_PERSONA),
-            "--pids",
-            pid_arg,  # <-- new argument
-        ],
-        cwd=str(project_root),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    print("=" * 60)
+    print(f"🧠 Starting sequential simulation run at {datetime.datetime.now()}")
+    print(f"📝 Logging to: {log_path}")
+    print("=" * 60)
 
-    try:
+    failed_pids = []
+
+    for pid in pids_to_run:
+        print(f"\n🚀 Running simulation for persona: {pid}")
+        print("-" * 60)
+        log_file.write(f"\n[{datetime.datetime.now()}] Running simulation for {pid}\n")
+
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(project_root / "text_simulation" / "run_LLM_simulations.py"),
+                "--config",
+                str(project_root / "text_simulation" / "configs" / "openai_config.yaml"),
+                "--max_personas",
+                "1",  # 每次只跑一个人
+                "--num_simulations_per_persona",
+                str(NUM_SIMULATIONS_PER_PERSONA),
+                "--pids",
+                pid,
+            ],
+            cwd=str(project_root),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
         for line in process.stdout:
             print(line.rstrip())
+            log_file.write(line)
 
         process.wait()
+
         if process.returncode == 0:
-            print("\n✅ Simulations for incomplete personas completed successfully.")
+            print(f"✅ {pid} completed successfully.")
+            log_file.write(f"[{datetime.datetime.now()}] ✅ {pid} completed successfully.\n")
         else:
-            print(f"\n❌ Error running simulations (exit code: {process.returncode})")
+            print(f"❌ {pid} failed (exit code: {process.returncode})")
+            log_file.write(f"[{datetime.datetime.now()}] ❌ {pid} failed.\n")
+            failed_pids.append(pid)
 
-    except KeyboardInterrupt:
-        print("\n⚠️ Simulation interrupted by user")
-        process.terminate()
-        process.wait()
+        # ✅ 每次之间暂停 10 秒，避免 API 限速
+        print("⏸️  Waiting 10 seconds before next persona...\n")
+        time.sleep(10)
 
+    log_file.close()
 
-#Step 8: 统一把答案嵌入到问题里
+    print("\n🎯 All sequential simulations finished.")
+    print(f"📘 Full log saved at: {log_path}")
+
+    if failed_pids:
+        print(f"\n⚠️ The following personas failed: {', '.join(failed_pids)}")
+        fail_path = project_root / "failed_personas.txt"
+        with open(fail_path, "w") as f:
+            f.write("\n".join(failed_pids))
+        print(f"📝 Saved failed persona IDs to: {fail_path}")
+    else:
+        print("✅ All personas completed successfully.")
+
 
 
 #Step 8: Examine Simulation Results
@@ -533,3 +551,4 @@ output_path = folder / "combined_persona_wave1_3.csv"
 combined_df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
 print(f"✅ Combined CSV saved to: {output_path}")
+
