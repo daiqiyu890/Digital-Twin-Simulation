@@ -15,7 +15,7 @@ from text_simulation.full_pipeline_utils import *
 
 #set up the open AI key
 import os
-os.environ["OPENAI_API_KEY"] = "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"
+#os.environ["OPENAI_API_KEY"] = "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"
 
 # Direct path setup - adjust this path if your project is in a different location
 # PROJECT_ROOT_PATH = "/Users/qiyudai/Documents/Github/Digital-Twin-Simulation"
