@@ -53,8 +53,8 @@ dst_folder="/Users/qiyudai/Dropbox/research_projects/LLM/output_back_up"
 duplicate_folder(src_folder, dst_folder, overwrite=True)
 
 # Configuration
-MAX_PERSONAS = 2  # Limit for demo purposes
-NUM_SIMULATIONS_PER_PERSONA=4
+MAX_PERSONAS = 20  # Limit for demo purposes
+NUM_SIMULATIONS_PER_PERSONA=1
 
 print(f"✅ Project root: {project_root}")
 print(f"Current directory: {Path.cwd()}")

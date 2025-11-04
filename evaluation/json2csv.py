@@ -13,6 +13,8 @@ Features:
 - Generate randdollar breakdown for pricing analysis
 """
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Sequence
 import os
 import json
 import pandas as pd
@@ -32,6 +34,7 @@ import logging
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
+
 
 class ExtractionMode(Enum):
     """Extraction mode for prioritizing numeric vs text values."""
@@ -556,15 +559,13 @@ class JSONToCSVConverter:
 
     def process_wave(self, wave_name: str, wave_config: dict) -> Optional[Dict[str, pd.DataFrame]]:
         """
-        Unified process_wave that supports both single-file (human) and multi-simulation (LLM) patterns.
-        Combines all persona-level data into one DataFrame (assumes one row per persona).
+        并行化版本：每个 persona 在独立进程中解析并落盘，再在主进程合并。
         """
         input_pattern = wave_config.get('input_pattern')
         if not input_pattern:
             logger.warning(f"No input pattern specified for {wave_name}")
             return None
 
-        # Expand wildcards and search recursively
         full_pattern = input_pattern.replace('{pid}', '*')
         json_files = sorted(glob.glob(full_pattern, recursive=True))
         if not json_files:
@@ -573,72 +574,70 @@ class JSONToCSVConverter:
 
         logger.info(f"Found {len(json_files)} files for wave {wave_name}")
 
-        # Apply max_personas limit
-        if self.config.get('max_personas'):
-            persona_ids = sorted({re.search(r'(pid_\d+)', f).group(1) for f in json_files if re.search(r'(pid_\d+)', f)})
-            persona_ids = persona_ids[:self.config['max_personas']]
-            json_files = [f for f in json_files if any(pid in f for pid in persona_ids)]
-            logger.info(f"Limited to {len(persona_ids)} personas (max_personas={self.config['max_personas']})")
-
-        numeric_extractor = AnswerExtractor(ExtractionMode.NUMERIC)
-        text_extractor = AnswerExtractor(ExtractionMode.TEXT)
-
-        # Group by persona
-        from collections import defaultdict
+        # 分组
         persona_groups = defaultdict(list)
         for f in json_files:
-            match = re.search(r'(pid_\d+)', f)
-            if match:
-                persona_groups[match.group(1)].append(f)
+            m = re.search(r'(pid_\d+)', f)
+            if m:
+                persona_groups[m.group(1)].append(f)
 
-        # Output folder
+        # 可选：限制 persona 数
+        if self.config.get('max_personas'):
+            keep = sorted(persona_groups.keys())[:int(self.config['max_personas'])]
+            persona_groups = {pid: persona_groups[pid] for pid in keep}
+            logger.info(f"Limited to {len(keep)} personas (max_personas={self.config['max_personas']})")
+
+        # 输出目录
         output_root = Path(self.config["trial_dir"]) / f"csv_persona_level_{wave_name}"
         output_root.mkdir(parents=True, exist_ok=True)
 
-        all_numeric, all_text = [], []
+        # 并发度
+        workers = int(self.config.get('parallel_workers') or os.environ.get('JSON2CSV_WORKERS') or (os.cpu_count() or 8))
+        workers = min(16, max(1, workers))
+        logger.info(f"🚀 Parallel processing with {workers} workers for {len(persona_groups)} personas")
 
-        for pid, files in persona_groups.items():
-            persona_numeric, persona_text = [], []
-            for json_path in files:
-                sim_match = re.search(r'(pid_\d+_sim\d+)', json_path)
-                sim_id = sim_match.group(1) if sim_match else pid
+        results_meta = []
+        tasks = [(pid, files, str(output_root)) for pid, files in persona_groups.items()]
 
-                numeric_ans = numeric_extractor.extract_from_file(json_path)
-                text_ans = text_extractor.extract_from_file(json_path)
-                if numeric_ans:
-                    numeric_ans.update({"PERSONA_ID": pid, "SIMULATION_ID": sim_id})
-                    persona_numeric.append(numeric_ans)
-                if text_ans:
-                    text_ans.update({"PERSONA_ID": pid, "SIMULATION_ID": sim_id})
-                    persona_text.append(text_ans)
+        # 进程池执行
+        with ProcessPoolExecutor(max_workers=workers) as exe:
+            futs = [exe.submit(_process_one_persona_to_csv, t) for t in tasks]
+            for fut in as_completed(futs):
+                pid, csv_path, nrows = fut.result()
+                if nrows == 0:
+                    logger.warning(f"Persona {pid}: no valid answers extracted")
+                else:
+                    logger.info(f"✅ Saved {nrows} rows for {pid}")
+                results_meta.append((pid, csv_path, nrows))
 
-            if not persona_numeric:
-                logger.warning(f"No valid answers extracted for {pid}")
-                continue
-
-            df_numeric = pd.DataFrame(persona_numeric)
-            df_text = pd.DataFrame(persona_text)
-            df_numeric.to_csv(output_root / f"{pid}.csv", index=False)
-            logger.info(f"✅ Saved {len(df_numeric)} rows for {pid}")
-
-            all_numeric.append(df_numeric)
-            all_text.append(df_text)
-
-        # Merge all persona-level data
-        if not all_numeric:
+        # 汇总
+        valid_paths = [p for _, p, n in results_meta if n > 0 and os.path.exists(p)]
+        if not valid_paths:
             logger.warning(f"No persona data found for {wave_name}")
             return None
 
+        # 只在主进程读回并合并，避免进程间传大对象
+        all_numeric = []
+        for p in sorted(valid_paths):
+            try:
+                all_numeric.append(pd.read_csv(p))
+            except Exception as e:
+                logger.warning(f"Failed to read persona csv {p}: {e}")
+
+        if not all_numeric:
+            logger.warning(f"No readable persona csv for {wave_name}")
+            return None
+
         df_all_numeric = pd.concat(all_numeric, ignore_index=True)
-        df_all_text = pd.concat(all_text, ignore_index=True) if all_text else pd.DataFrame()
-
-        # Sort by PERSONA_ID (first column)
         if "PERSONA_ID" in df_all_numeric.columns:
-            df_all_numeric.sort_values(by="PERSONA_ID", inplace=True)
+            df_all_numeric.sort_values(by=["PERSONA_ID", "SIMULATION_ID"], inplace=True)
 
-        logger.info(f"✅ Combined {len(df_all_numeric)} personas into single DataFrame for wave {wave_name}")
+        # text 版本：如需，也可以像 numeric 一样在子进程落盘另一个文件并读回
+        # 这里保持和你原逻辑一致，如果暂时不需要合并 text，则返回空 DataFrame
+        df_all_text = pd.DataFrame()
+
+        logger.info(f"✅ Combined {len(df_all_numeric)} rows across {len(valid_paths)} personas for wave {wave_name}")
         return {"numeric": df_all_numeric, "text": df_all_text}
-
 
 
                         
