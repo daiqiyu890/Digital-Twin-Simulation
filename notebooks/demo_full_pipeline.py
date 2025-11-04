@@ -1,24 +1,25 @@
-# cd /Users/qiyudai/Documents/Github/Digital-Twin-Simulation/notebooks
-# cd /home/users/s1155141616/Digital-Twin-Simulation/notebooks
-#Step1: Setup and Configuration
+# cd /Users/qiyudai/Documents/Github/Digital-Twin-Simulation
+# cd /scratch/qd2177/research/Digital-Twin-Simulation
 
+#Step1: Setup and Configuration
 # Import required libraries
 import os
 import sys
 import json
 import yaml
+import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
 import time
-from full_pipeline_utils import *
+from text_simulation.full_pipeline_utils import *
 
 #set up the open AI key
 import os
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = "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"
 
 # Direct path setup - adjust this path if your project is in a different location
-PROJECT_ROOT_PATH = "/Users/qiyudai/Documents/Github/Digital-Twin-Simulation"
-# PROJECT_ROOT_PATH = "/home/users/s1155141616/Digital-Twin-Simulation"
+# PROJECT_ROOT_PATH = "/Users/qiyudai/Documents/Github/Digital-Twin-Simulation"
+PROJECT_ROOT_PATH = "/scratch/qd2177/research/Digital-Twin-Simulation"
 
 # Set up project root
 project_root = Path(PROJECT_ROOT_PATH)
@@ -47,12 +48,14 @@ missing_info = clean_error_simulations_no_confirm(
 
 #duplicate current results to dropbox
 src_folder= project_root / "text_simulation/text_simulation_output"
-dst_folder="/Users/qiyudai/Dropbox/research_projects/LLM/output_back_up"
-duplicate_folder(src_folder, dst_folder, overwrite=True)
+dst_folder="/scratch/qd2177/research/back-up files"
+# duplicate_folder(src_folder, dst_folder, overwrite=True)
 
 # Configuration
-MAX_PERSONAS = 30  # Limit for demo purposes
-NUM_SIMULATIONS_PER_PERSONA=1
+MAX_PERSONAS = 1  # Limit for demo purposes
+NUM_SIMULATIONS_PER_PERSONA=35
+NUM_WORKERS=12
+MAX_RETRIES=8
 
 print(f"✅ Project root: {project_root}")
 print(f"Current directory: {Path.cwd()}")
@@ -121,6 +124,8 @@ try:
     # Update max_personas
     config['max_personas'] = MAX_PERSONAS
     config['num_simulations_per_persona']=NUM_SIMULATIONS_PER_PERSONA
+    config['num_workers'] = NUM_WORKERS
+    config['max_retries'] = MAX_RETRIES
     
     # Write back
     with open(config_path, 'w') as f:
@@ -184,7 +189,7 @@ except Exception as e:
 
 #Step 5: Convert Questions to text format
 print("=" * 60)
-print("Step 4: Convert Questions to Text")
+print("Step 5: Convert Questions to Text")
 print("=" * 60)
 
 # Use subprocess to run the script with proper Python path
@@ -219,7 +224,7 @@ else:
 
 #Step 6: Create Simulation Input
 print("=" * 60)
-print("Step 5: Create Simulation Input")
+print("Step 6: Create Simulation Input")
 print("=" * 60)
 
 # Import the function
@@ -255,7 +260,7 @@ except Exception as e:
 
 # Step 7: Pre-check — Identify complete / incomplete personas
 print("=" * 60)
-print("Pre-check: Determine complete and incomplete personas")
+print("Step 7: Pre-check: Determine complete and incomplete personas")
 print("=" * 60)
 
 output_sim_dir = project_root / "text_simulation" / "text_simulation_output"
@@ -393,9 +398,9 @@ else:
             log_file.write(f"[{datetime.datetime.now()}] ❌ {pid} failed.\n")
             failed_pids.append(pid)
 
-        # ✅ 每次之间暂停 10 秒，避免 API 限速
-        print("⏸️  Waiting 10 seconds before next persona...\n")
-        time.sleep(10)
+        # ✅ 每次之间暂停 5 秒，避免 API 限速
+        print("⏸️  Waiting 5 seconds before next persona...\n")
+        time.sleep(5)
 
     log_file.close()
 
@@ -412,10 +417,9 @@ else:
         print("✅ All personas completed successfully.")
 
 
-
-#Step 8: Examine Simulation Results
+#Step 9: Examine Simulation Results
 print("=" * 60)
-print("Step 7: Examine Results")
+print("Step 9: Examine Results")
 print("=" * 60)
 
 output_dir = project_root / "text_simulation" / "text_simulation_output"
@@ -449,16 +453,16 @@ else:
     print("No output directory found")
 
 
-#Step 9: Convert JSON to CSV for Evaluation
+#Step 10: Convert JSON to CSV for Evaluation
 print("=" * 60)
-print("Step 8: Convert JSON to CSV for Evaluation")
+print("Step 10: Convert JSON to CSV for Evaluation")
 print("=" * 60)
 
 # Create evaluation config for json2csv
 eval_config = {
     "trial_dir": "text_simulation/text_simulation_output/",
     "model_name": "gpt-4.1-mini",
-    "max_personas": MAX_PERSONAS,
+    "max_personas": 40,
     "waves": {
         "wave1_3": {
             "input_pattern": "data/mega_persona_json/answer_blocks/pid_{pid}_wave4_Q_wave1_3_A.json",
@@ -473,7 +477,7 @@ eval_config = {
             "output_csv_labeled": "${trial_dir}/csv_comparison/csv_formatted_label/responses_wave4_label_formatted.csv"
         },
         "llm_imputed": {
-            "input_pattern": "${trial_dir}/answer_blocks_llm_imputed/pid_{pid}/**/pid_{pid}_sim*_wave4_Q_wave4_A.json",
+            "input_pattern": "${trial_dir}/answer_blocks_llm_imputed/pid_{pid}/**/pid_{pid}_*wave4_Q_wave4_A.json",
             "output_csv": "${trial_dir}/csv_comparison/responses_llm_imputed.csv",
             "output_csv_formatted": "${trial_dir}/csv_comparison/csv_formatted/responses_llm_imputed_formatted.csv",
             "output_csv_labeled": "${trial_dir}/csv_comparison/csv_formatted_label/responses_llm_imputed_label_formatted.csv"
@@ -530,7 +534,7 @@ import pandas as pd
 from pathlib import Path
 
 #folder=Path("/home/users/s1155141616/Digital-Twin-Simulation/text_simulation/text_simulation_output/csv_persona_level_wave1_3")
-folder = Path("/Users/qiyudai/Documents/Github/Digital-Twin-Simulation/text_simulation/text_simulation_output/csv_persona_level_wave1_3")
+folder = PROJECT_ROOT_PATH+"/text_simulation/text_simulation_output/csv_persona_level_wave1_3"
 csv_files = sorted(folder.glob("pid_*.csv"))
 
 # 读取并合并

@@ -453,6 +453,43 @@ class AnswerExtractor:
 
 class JSONToCSVConverter:
     """Main converter class for JSON to CSV transformation using the original logic"""
+    def _process_one_persona_to_csv(args: Tuple[str, Sequence[str], str]) -> Tuple[str, str, int]:
+        """
+        子进程中运行：处理单个 persona，直接落盘为 csv，并返回 (pid, csv_path, n_rows)
+        args: (pid, files, output_dir)
+        """
+        pid, files, output_dir = args
+        try:
+            numeric_extractor = AnswerExtractor(ExtractionMode.NUMERIC)
+            text_extractor = AnswerExtractor(ExtractionMode.TEXT)
+
+            persona_numeric, persona_text = [], []
+            for json_path in files:
+                sim_match = re.search(r'(pid_\d+_sim\d+)', json_path)
+                sim_id = sim_match.group(1) if sim_match else pid
+
+                numeric_ans = numeric_extractor.extract_from_file(json_path)
+                text_ans = text_extractor.extract_from_file(json_path)
+                if numeric_ans:
+                    numeric_ans.update({"PERSONA_ID": pid, "SIMULATION_ID": sim_id})
+                    persona_numeric.append(numeric_ans)
+                if text_ans:
+                    text_ans.update({"PERSONA_ID": pid, "SIMULATION_ID": sim_id})
+                    persona_text.append(text_ans)
+
+            if not persona_numeric:
+                # 返回0行，主进程会 WARN
+                return pid, os.path.join(output_dir, f"{pid}.csv"), 0
+
+            # 写 persona 级 CSV
+            df_num = pd.DataFrame(persona_numeric)
+            out_path = os.path.join(output_dir, f"{pid}.csv")
+            df_num.to_csv(out_path, index=False)
+            return pid, out_path, len(df_num)
+        except Exception as e:
+            logger.warning(f"[{pid}] failed in worker: {e}")
+            return pid, os.path.join(output_dir, f"{pid}.csv"), 0
+
     
     def __init__(self, config: dict):
         """Initialize converter with configuration"""
