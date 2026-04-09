@@ -105,3 +105,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     create_combined_prompts(args.persona_text_dir, args.question_prompts_dir, args.output_combined_prompts_dir) 
+
+
+    
