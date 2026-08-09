@@ -13,9 +13,7 @@ from dotenv import load_dotenv
 import time
 from text_simulation.full_pipeline_utils import *
 
-#set up the open AI key
-import os
-#os.environ["OPENAI_API_KEY"] = key
+# API keys are loaded from ENV_PATH below; do not commit real keys into code.
 
 # Direct path setup - adjust this path if your project is in a different location
 # PROJECT_ROOT_PATH = "/Users/qiyudai/Documents/Github/Digital-Twin-Simulation"
@@ -38,24 +36,92 @@ if not (project_root / 'evaluation').exists():
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# Configuration
+# Use MAX_PERSONAS as the single source of truth for this demo script.
+# When this script runs, it writes this value into openai_config.yaml and
+# also reuses it for evaluation/json2csv below.
+# =========================
+# User-specified parameters
+# Change these when running a new experiment.
+# =========================
+
+# Experiment size
+MAX_PERSONAS = 2
+NUM_SIMULATIONS_PER_PERSONA = 2
+
+# Provider/model choice
+# PROVIDER must be one of:
+#   openai
+#   deepseek
+#   claude      # alias: anthropic
+#   anthropic   # same backend as claude
+#   gemini
+#
+# MODEL_NAME should be a model id supported by the selected provider.
+# Common examples:
+#   openai:   gpt-4.1-mini-2025-04-14, gpt-4.1, gpt-4o-mini, gpt-4o
+#   deepseek: deepseek-chat, deepseek-reasoner
+#   claude:   claude-3-5-sonnet-20241022, claude-3-5-haiku-20241022
+#   gemini:   gemini-1.5-pro, gemini-1.5-flash
+#
+# API keys are loaded from:
+#   /Users/qiyudai/Documents/Github/Digital-Twin-Simulation/.env
+#   OPENAI_API_KEY=...
+#   DEEPSEEK_API_KEY=...
+#   ANTHROPIC_API_KEY=...
+#   GOOGLE_API_KEY=...
+ENV_PATH = project_root / ".env"
+if not ENV_PATH.exists():
+    ENV_PATH = project_root / "notebooks" / ".env"
+PROVIDER = "openai"
+MODEL_NAME = "gpt-4.1-mini-2025-04-14"
+
+# Common generation parameters
+TEMPERATURE = 1
+MAX_TOKENS = 16384
+
+# Runtime/retry parameters
+NUM_WORKERS = 12
+MAX_RETRIES = 8
+
+# Provider-specific API parameters.
+# Fill only the provider you are using; leave others as {}.
+# Examples:
+#   DeepSeek: {"base_url": "https://api.deepseek.com"}
+#   Claude: {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+#   Gemini: {"thinking_config": {"thinking_budget": 1024}}
+PROVIDER_MODEL_PARAMS = {
+    "openai": {},
+    "deepseek": {"base_url": "https://api.deepseek.com"},
+    "claude": {},
+    "anthropic": {},
+    "gemini": {},
+}
+
+# =========================
+# Derived paths
+# Normally do not edit these directly.
+# =========================
+
+MODEL_DIR_NAME = MODEL_NAME.replace("/", "-")
+RUN_NAME = f"temp_{TEMPERATURE}"
+OUTPUT_FOLDER_DIR = f"text_simulation_output/{PROVIDER}/{MODEL_DIR_NAME}/{RUN_NAME}"
+
+RUN_OUTPUT_ROOT = project_root / "text_simulation" / OUTPUT_FOLDER_DIR
+RUN_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
 #clean existing csv files
-clean_simulation_dirs(project_root, confirm=True)
+clean_simulation_dirs(project_root, output_root=RUN_OUTPUT_ROOT, confirm=True)
 
 #clean existing files with error
 missing_info = clean_error_simulations_no_confirm(
-    output_root=project_root / "text_simulation" / "text_simulation_output"
+    output_root=RUN_OUTPUT_ROOT
 )
 
 #duplicate current results to dropbox
-src_folder= project_root / "text_simulation/text_simulation_output"
+src_folder = RUN_OUTPUT_ROOT
 dst_folder="/scratch/qd2177/research/back-up files"
 # duplicate_folder(src_folder, dst_folder, overwrite=True)
-
-# Configuration
-MAX_PERSONAS = 1  # Limit for demo purposes
-NUM_SIMULATIONS_PER_PERSONA=35
-NUM_WORKERS=12
-MAX_RETRIES=8
 
 print(f"✅ Project root: {project_root}")
 print(f"Current directory: {Path.cwd()}")
@@ -71,15 +137,29 @@ print("=" * 60)
 print()
 
 # Load environment variables
-load_dotenv(project_root / '.env')
+load_dotenv(ENV_PATH)
 
-# Check OpenAI API key
-if not os.getenv("OPENAI_API_KEY"):
-    print("⚠️  Please set your OPENAI_API_KEY in the .env file")
+# Check the API key
+config_path = project_root / "text_simulation" / "configs" / "openai_config.yaml"
+with open(config_path, 'r') as f:
+    config = yaml.safe_load(f)
+provider = PROVIDER
+
+if provider == "openai":
+    api_key = os.getenv("OPENAI_API_KEY")
+elif provider == "deepseek":
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+elif provider in {"claude", "anthropic"}:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+elif provider == "gemini":
+    api_key = os.getenv("GOOGLE_API_KEY")
 else:
-    print("✅ OpenAI API key loaded successfully")
+    api_key = None
 
-print(f"\nConfigured to process {MAX_PERSONAS} personas for this demo")
+if not api_key:
+    print(f"⚠️  Please set your {provider.upper()}_API_KEY in {ENV_PATH}")
+else:
+    print(f"✅ {provider.upper()} API key loaded successfully")
 
 
 #Step 2: load the dataset
@@ -126,6 +206,13 @@ try:
     config['num_simulations_per_persona']=NUM_SIMULATIONS_PER_PERSONA
     config['num_workers'] = NUM_WORKERS
     config['max_retries'] = MAX_RETRIES
+    config['temperature'] = TEMPERATURE
+    config['max_tokens'] = MAX_TOKENS
+    config['provider'] = PROVIDER
+    config['model_name'] = MODEL_NAME
+    config['run_name'] = RUN_NAME
+    config['output_folder_dir'] = OUTPUT_FOLDER_DIR
+    config['provider_model_params'] = PROVIDER_MODEL_PARAMS
     
     # Write back
     with open(config_path, 'w') as f:
@@ -263,7 +350,7 @@ print("=" * 60)
 print("Step 7: Pre-check: Determine complete and incomplete personas")
 print("=" * 60)
 
-output_sim_dir = project_root / "text_simulation" / "text_simulation_output"
+output_sim_dir = RUN_OUTPUT_ROOT
 
 
 # Count how many simulations exist for each persona
@@ -422,7 +509,7 @@ print("=" * 60)
 print("Step 9: Examine Results")
 print("=" * 60)
 
-output_dir = project_root / "text_simulation" / "text_simulation_output"
+output_dir = RUN_OUTPUT_ROOT
 
 if output_dir.exists():
     persona_dirs = [d for d in output_dir.iterdir() if d.is_dir() and d.name.startswith("pid_")]
@@ -460,9 +547,9 @@ print("=" * 60)
 
 # Create evaluation config for json2csv
 eval_config = {
-    "trial_dir": "text_simulation/text_simulation_output/",
-    "model_name": "gpt-4.1-mini",
-    "max_personas": 40,
+    "trial_dir": f"text_simulation/{OUTPUT_FOLDER_DIR}/",
+    "model_name": MODEL_NAME,
+    "max_personas": MAX_PERSONAS,
     "waves": {
         "wave1_3": {
             "input_pattern": "data/mega_persona_json/answer_blocks/pid_{pid}_wave4_Q_wave1_3_A.json",
@@ -510,7 +597,7 @@ if result.returncode == 0:
     print("✅ JSON to CSV conversion completed successfully")
     
     # Check what was created
-    csv_dir = project_root / "text_simulation" / "text_simulation_output" / "csv_comparison"
+    csv_dir = RUN_OUTPUT_ROOT / "csv_comparison"
     if csv_dir.exists():
         csv_files = list((csv_dir / "csv_formatted").glob("*.csv")) if (csv_dir / "csv_formatted").exists() else []
         print(f"   Generated {len(csv_files)} formatted CSV files")
@@ -534,7 +621,7 @@ import pandas as pd
 from pathlib import Path
 
 #folder=Path("/home/users/s1155141616/Digital-Twin-Simulation/text_simulation/text_simulation_output/csv_persona_level_wave1_3")
-folder = PROJECT_ROOT_PATH+"/text_simulation/text_simulation_output/csv_persona_level_wave1_3"
+folder = RUN_OUTPUT_ROOT / "csv_persona_level_wave1_3"
 csv_files = sorted(folder.glob("pid_*.csv"))
 
 # 读取并合并
@@ -555,4 +642,3 @@ output_path = folder / "combined_persona_wave1_3.csv"
 combined_df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
 print(f"✅ Combined CSV saved to: {output_path}")
-

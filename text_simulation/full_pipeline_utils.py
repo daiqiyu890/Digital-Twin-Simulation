@@ -2,7 +2,7 @@ import shutil
 from pathlib import Path
 import pandas as pd
 
-def clean_simulation_dirs(project_root, confirm=True, dry_run=False):
+def clean_simulation_dirs(project_root, output_root=None, confirm=True, dry_run=False):
     """
     Clean up intermediate and output directories before a new large-scale simulation run.
 
@@ -16,13 +16,14 @@ def clean_simulation_dirs(project_root, confirm=True, dry_run=False):
         If True, only print target directories without deleting or recreating them.
     """
     project_root = Path(project_root)
+    output_root = Path(output_root) if output_root is not None else project_root / "text_simulation" / "text_simulation_output"
 
     # --- define directories to clean ---
     dirs_to_clean = [
-        project_root / "text_simulation" / "text_simulation_output" / "csv_persona_level_llm_imputed",
-        project_root / "text_simulation" / "text_simulation_output" / "csv_comparison",
-        project_root / "text_simulation" / "text_simulation_output" / "csv_persona_level_wave1_3",
-        project_root / "t4_simulation" / "text_simulation_output" / "csv_persona_level_wave4"
+        output_root / "csv_persona_level_llm_imputed",
+        output_root / "csv_comparison",
+        output_root / "csv_persona_level_wave1_3",
+        output_root / "csv_persona_level_wave4",
     ]
 
     print("=" * 60)

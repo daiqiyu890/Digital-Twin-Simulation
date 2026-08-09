@@ -1,11 +1,8 @@
 import os
-import time
-from typing import Dict, Optional, Union, Callable, List, Tuple
-import google.generativeai as genai
-from google.generativeai import types
+from typing import Dict, Optional, Union, Callable, List, Tuple, Any
 import openai
 from dotenv import load_dotenv
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryCallState
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import httpx
 import asyncio
 from tqdm.asyncio import tqdm_asyncio
@@ -33,6 +30,7 @@ class LLMConfig:
         system_instruction: Optional[str] = None,
         max_retries: int = 10, # Max retries for the combined LLM call + Verification
         max_concurrent_requests: int = 5,
+        provider_params: Optional[Dict[str, Any]] = None,
         verification_callback: Optional[Callable[..., bool]] = None,
         verification_callback_args: Optional[Dict] = None
     ):
@@ -42,8 +40,98 @@ class LLMConfig:
         self.system_instruction = system_instruction or GEMINI_SYSTEM_INSTRUCTION
         self.max_retries = max_retries
         self.max_concurrent_requests = max_concurrent_requests
+        self.provider_params = provider_params if provider_params is not None else {}
         self.verification_callback = verification_callback
         self.verification_callback_args = verification_callback_args if verification_callback_args is not None else {}
+
+
+def _without_none_values(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in data.items() if v is not None}
+
+
+def _build_chat_messages(prompt: str, config: LLMConfig) -> List[Dict[str, str]]:
+    return [
+        {"role": "system", "content": config.system_instruction},
+        {"role": "user", "content": prompt},
+    ]
+
+
+def _pop_internal_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove adapter-only options before forwarding params to SDK calls."""
+    internal = {}
+    for key in (
+        "api_base",
+        "base_url",
+        "request_timeout",
+        "force_json_output",
+        "max_tokens_param",
+        "supports_temperature",
+        "gemini_generation_config",
+    ):
+        if key in params:
+            internal[key] = params.pop(key)
+    return internal
+
+
+def _force_json_output(config: LLMConfig) -> bool:
+    return bool(config.provider_params.get("force_json_output", True))
+
+
+def _looks_like_openai_reasoning_model(model_name: str) -> bool:
+    model = (model_name or "").lower()
+    return model.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
+def _openai_max_tokens_param(config: LLMConfig) -> str:
+    override = config.provider_params.get("max_tokens_param")
+    if override:
+        if override not in {"max_tokens", "max_completion_tokens"}:
+            raise ValueError("max_tokens_param must be 'max_tokens' or 'max_completion_tokens'")
+        return override
+    return "max_completion_tokens" if _looks_like_openai_reasoning_model(config.model_name) else "max_tokens"
+
+
+def _openai_supports_temperature(config: LLMConfig) -> bool:
+    if "supports_temperature" in config.provider_params:
+        return bool(config.provider_params["supports_temperature"])
+    return not _looks_like_openai_reasoning_model(config.model_name)
+
+
+def _chat_completion_kwargs(prompt: str, config: LLMConfig, *, provider: str) -> Dict[str, Any]:
+    params = dict(config.provider_params)
+    _pop_internal_params(params)
+    extra_body = params.pop("extra_body", None)
+    kwargs = {
+        "model": config.model_name,
+        "messages": _build_chat_messages(prompt, config),
+        **params,
+    }
+
+    if provider == "openai":
+        if config.max_tokens is not None:
+            kwargs[_openai_max_tokens_param(config)] = config.max_tokens
+        if config.temperature is not None and _openai_supports_temperature(config):
+            kwargs["temperature"] = config.temperature
+    else:
+        if config.max_tokens is not None:
+            kwargs["max_tokens"] = config.max_tokens
+        if config.temperature is not None:
+            kwargs["temperature"] = config.temperature
+
+    if _force_json_output(config) and "response_format" not in kwargs:
+        kwargs["response_format"] = {"type": "json_object"}
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    return _without_none_values(kwargs)
+
+
+def _openai_usage_details(response) -> Dict[str, int]:
+    usage = getattr(response, "usage", None)
+    return {
+        "prompt_token_count": getattr(usage, "prompt_tokens", 0) if usage else 0,
+        "completion_token_count": getattr(usage, "completion_tokens", 0) if usage else 0,
+        "total_token_count": getattr(usage, "total_tokens", 0) if usage else 0,
+    }
 
 @retry(
     stop=stop_after_attempt(5), # Max 5 retries for the direct API call itself
@@ -56,18 +144,86 @@ async def _get_openai_response_direct(prompt: str, config: LLMConfig) -> Dict[st
     if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable not set")
     
-    async with httpx.AsyncClient(timeout=1000.0) as client:
+    async with httpx.AsyncClient(timeout=config.provider_params.get("request_timeout", 1000.0)) as client:
         aclient = openai.AsyncOpenAI(api_key=api_key, http_client=client)
-        messages = [{"role": "system", "content": config.system_instruction}, {"role": "user", "content": prompt}]
-        response = await aclient.chat.completions.create(
-            model=config.model_name, messages=messages, temperature=config.temperature, max_tokens=config.max_tokens
-        )
-        usage_details = {
-            "prompt_token_count": response.usage.prompt_tokens,
-            "completion_token_count": response.usage.completion_tokens,
-            "total_token_count": response.usage.total_tokens
+        response = await aclient.chat.completions.create(**_chat_completion_kwargs(prompt, config, provider="openai"))
+        message = response.choices[0].message
+        return {
+            "response_text": message.content,
+            "usage_details": _openai_usage_details(response),
         }
-        return {"response_text": response.choices[0].message.content, "usage_details": usage_details}
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    retry=retry_if_exception_type((ConnectionError, TimeoutError, openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError, openai.APIError)),
+    reraise=True
+)
+async def _get_deepseek_response_direct(prompt: str, config: LLMConfig) -> Dict[str, Union[str, Dict]]:
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise ValueError("DEEPSEEK_API_KEY environment variable not set")
+
+    async with httpx.AsyncClient(timeout=config.provider_params.get("request_timeout", 1000.0)) as client:
+        aclient = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url=config.provider_params.get("base_url") or config.provider_params.get("api_base") or "https://api.deepseek.com",
+            http_client=client,
+        )
+        response = await aclient.chat.completions.create(**_chat_completion_kwargs(prompt, config, provider="deepseek"))
+        message = response.choices[0].message
+        result = {
+            "response_text": message.content,
+            "usage_details": _openai_usage_details(response),
+        }
+        reasoning_content = getattr(message, "reasoning_content", None)
+        if reasoning_content:
+            result["reasoning_content"] = reasoning_content
+        return result
+
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+    reraise=True
+)
+async def _get_claude_response_direct(prompt: str, config: LLMConfig) -> Dict[str, Union[str, Dict]]:
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise ImportError("Install the anthropic package to use provider='claude'.") from exc
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY environment variable not set")
+
+    params = dict(config.provider_params)
+    _pop_internal_params(params)
+    thinking = params.get("thinking")
+    kwargs = {
+        "model": config.model_name,
+        "system": config.system_instruction,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": config.max_tokens or 4096,
+        **params,
+    }
+    if config.temperature is not None and not thinking:
+        kwargs["temperature"] = config.temperature
+    response = await asyncio.to_thread(
+        lambda: anthropic.Anthropic(api_key=api_key, timeout=config.provider_params.get("request_timeout", 1000.0)).messages.create(**_without_none_values(kwargs))
+    )
+    response_text = "".join(
+        block.text for block in response.content if getattr(block, "type", None) == "text"
+    )
+    usage = getattr(response, "usage", None)
+    usage_details = {
+        "prompt_token_count": getattr(usage, "input_tokens", 0) if usage else 0,
+        "completion_token_count": getattr(usage, "output_tokens", 0) if usage else 0,
+    }
+    usage_details["total_token_count"] = usage_details["prompt_token_count"] + usage_details["completion_token_count"]
+    return {"response_text": response_text, "usage_details": usage_details}
 
 @retry(
     stop=stop_after_attempt(5), # Max 5 retries for the direct API call itself
@@ -79,15 +235,34 @@ async def _get_openai_response_direct(prompt: str, config: LLMConfig) -> Dict[st
     reraise=True
 )
 async def _get_gemini_response_direct(prompt: str, config: LLMConfig) -> Dict[str, Union[str, Dict]]:
+    try:
+        import google.generativeai as genai
+    except ImportError as exc:
+        raise ImportError("Install google-generativeai to use provider='gemini'.") from exc
+
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError("GOOGLE_API_KEY environment variable not set")
-    g_client = genai.Client(api_key=api_key)
+
+    genai.configure(api_key=api_key)
+    params = dict(config.provider_params)
+    internal = _pop_internal_params(params)
+    generation_config = _without_none_values({
+        "temperature": config.temperature,
+        "max_output_tokens": config.max_tokens,
+        "response_mime_type": "application/json" if _force_json_output(config) else None,
+        **internal.get("gemini_generation_config", {}),
+        **params,
+    })
+
     response = await asyncio.get_event_loop().run_in_executor(
         None,
-        lambda: g_client.models.generate_content(
-            model=config.model_name, contents=[prompt],
-            generation_config=types.GenerationConfig(temperature=config.temperature),
+        lambda: genai.GenerativeModel(
+            model_name=config.model_name,
+            system_instruction=config.system_instruction,
+            generation_config=generation_config,
+        ).generate_content(
+            prompt,
         )
     )
 
@@ -99,8 +274,15 @@ async def _get_gemini_response_direct(prompt: str, config: LLMConfig) -> Dict[st
             "usage_details": {"prompt_token_count": response.usage_metadata.prompt_token_count if response.usage_metadata else 0}
         }
     # Check if candidates are empty or finished for a non-retryable reason
-    if not response.candidates or (response.candidates[0].finish_reason not in [types.FinishReason.STOP, types.FinishReason.MAX_TOKENS]):
-        finish_reason_name = response.candidates[0].finish_reason.name if response.candidates else "UNKNOWN_NO_CANDIDATES"
+    if not response.candidates:
+        return {
+            "error": "Generation returned no candidates",
+            "response_text": "",
+            "usage_details": {"prompt_token_count": response.usage_metadata.prompt_token_count if response.usage_metadata else 0}
+        }
+
+    finish_reason_name = getattr(response.candidates[0].finish_reason, "name", str(response.candidates[0].finish_reason))
+    if finish_reason_name not in ["STOP", "MAX_TOKENS", "1", "2"]:
         # If it's due to safety or other non-retryable reasons, treat as an error to avoid infinite loops
         if finish_reason_name in ["SAFETY", "RECITATION", "OTHER"]:
              return {
@@ -132,6 +314,10 @@ async def get_llm_response_with_internal_retry(
             return await _get_gemini_response_direct(prompt, config)
         elif provider.lower() == "openai":
             return await _get_openai_response_direct(prompt, config)
+        elif provider.lower() == "deepseek":
+            return await _get_deepseek_response_direct(prompt, config)
+        elif provider.lower() in {"claude", "anthropic"}:
+            return await _get_claude_response_direct(prompt, config)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     except Exception as e: # Catch exceptions from the direct calls after their retries
