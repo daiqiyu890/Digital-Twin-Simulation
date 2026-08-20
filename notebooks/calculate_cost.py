@@ -1,24 +1,44 @@
 import json
 from pathlib import Path
-import tiktoken
+
+try:
+    import tiktoken
+except Exception:
+    tiktoken = None
 
 # === 1. 基本配置 ===
 PROJECT_ROOT_PATH = "/Users/qiyudai/Documents/Github/Digital-Twin-Simulation"
 INPUT_SAMPLE = "text_simulation/text_simulation_input/pid_574_prompt.txt"
 OUTPUT_SAMPLE = "text_simulation/text_simulation_output/pid_574/pid_574_sim001/pid_574_sim001_response.json"
 
-# === 2. 模型和单价（以 GPT-4o 为例） ===
-MODEL_NAME = "gpt-4o-mini"
-PRICE_INPUT_PER_1K = 0.0003   # USD per 1K tokens (input)
-PRICE_OUTPUT_PER_1K = 0.0012  # USD per 1K tokens (output)
+# === 2. 模型和单价（DeepSeek V4 Flash） ===
+MODEL_NAME = "deepseek-v4-flash"
+PRICE_INPUT_PER_1K = 0.00014   # USD per 1K input tokens, cache miss
+PRICE_OUTPUT_PER_1K = 0.00028  # USD per 1K output tokens
 
-# === 3. 加载 tiktoken 编码器 ===
-# 根据模型自动选择正确的编码器（GPT-4o 兼容 cl100k_base）
-enc = tiktoken.encoding_for_model(MODEL_NAME)
+# === 3. Token counter ===
+# DeepSeek does not have a native tiktoken encoding. We try cl100k_base as an
+# estimate, but fall back to a no-network character heuristic if tiktoken cannot
+# load its encoding files locally.
+def _load_token_encoder():
+    if tiktoken is None:
+        return None
+    try:
+        return tiktoken.encoding_for_model(MODEL_NAME)
+    except Exception:
+        try:
+            return tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            return None
+
+enc = _load_token_encoder()
 
 def count_tokens(text: str) -> int:
-    """Count tokens in a string using tiktoken."""
-    return len(enc.encode(text))
+    """Estimate token count for cost planning."""
+    if enc is not None:
+        return len(enc.encode(text))
+    # Conservative rough estimate for English-heavy survey prompts.
+    return max(1, round(len(text) / 4))
 
 # === 4. 读取输入 prompt ===
 input_path = Path(PROJECT_ROOT_PATH) / INPUT_SAMPLE
@@ -44,7 +64,7 @@ total_cost = input_cost + output_cost
 
 # === 8. 全局 Simulation 估算 ===
 NUM_PERSONAS = 2058
-NUM_SIM_PER_PERSONA = 100
+NUM_SIM_PER_PERSONA = 50
 total_calls = NUM_PERSONAS * NUM_SIM_PER_PERSONA
 grand_input_tokens = input_tokens * total_calls
 grand_output_tokens = output_tokens * total_calls

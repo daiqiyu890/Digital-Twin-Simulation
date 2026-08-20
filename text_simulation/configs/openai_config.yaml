@@ -1,24 +1,27 @@
 force_regenerate: false
 input_folder_dir: text_simulation_input
-max_personas: 20
-max_retries: 10
+max_personas: 100
+max_retries: 8
 max_tokens: 16384
-model_name: gpt-4.1-mini-2025-04-14
+model_name: deepseek-v4-flash
 num_simulations_per_persona: 50
-num_workers: 300
-output_folder_dir: text_simulation_output/openai/gpt-4.1-mini-2025-04-14/temp_0.7
-provider: openai
+num_workers: 12
+output_folder_dir: text_simulation_output/deepseek/deepseek-v4-flash/temp_1
+provider: deepseek
 provider_model_params:
-  openai: {}
+  anthropic: {}
+  claude: {}
   deepseek:
     base_url: https://api.deepseek.com
-  claude: {}
-  anthropic: {}
+    extra_body:
+      thinking:
+        type: disabled
   gemini: {}
-run_name: temp_0.7
+  openai: {}
+run_name: temp_1
 system_instruction: "You are an AI assistant. Your task is to answer the 'New Survey\
   \ Question' as if you are the person described in the 'Persona Profile' (which consists\
   \ of their past survey responses). \nAdhere to the persona by being consistent with\
   \ their previous answers and stated characteristics. \nFollow all instructions provided\
   \ for the new question carefully regarding the format of your answer."
-temperature: 0.7
+temperature: 1

@@ -79,17 +79,12 @@ NUM_SIMULATIONS_PER_PERSONA = 50
 ENV_PATH = project_root / ".env"
 if not ENV_PATH.exists():
     ENV_PATH = project_root / "notebooks" / ".env"
-PROVIDER = "deepseek"
-MODEL_NAME = "deepseek-v4-flash"
+PROVIDER = "openai"
+MODEL_NAME = "gpt-4.1-mini-2026-08-10"
 
 # Common generation parameters
 TEMPERATURE = 1
 MAX_TOKENS = 16384
-
-# Cost-estimation constants for deepseek-v4-flash.
-# These are not used by the pipeline itself; they document the intended pricing.
-PRICE_INPUT_PER_1K = 0.00014   # USD per 1K input tokens, cache miss
-PRICE_OUTPUT_PER_1K = 0.00028  # USD per 1K output tokens
 
 # Runtime/retry parameters
 NUM_WORKERS = 12
